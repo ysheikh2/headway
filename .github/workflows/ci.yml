@@ -8,15 +8,53 @@ env:
   push:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
+  detect-changes:
+    name: Detect changed areas
+    runs-on: ubuntu-latest
+    outputs:
+      shell: ${{ steps.filter.outputs.shell }}
+      python: ${{ steps.filter.outputs.python }}
+      yaml: ${{ steps.filter.outputs.yaml }}
+      compose: ${{ steps.filter.outputs.compose }}
+      relevant: ${{ steps.filter.outputs.relevant }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.3
+
+      - name: Filter changed files
+        id: filter
+        uses: dorny/paths-filter@v4.0.1
+        with:
+          filters: |
+            shell:
+              - '**/*.sh'
+            python:
+              - '**/*.py'
+            yaml:
+              - '**/*.yml'
+              - '**/*.yaml'
+            compose:
+              - 'docker-compose.yml'
+            relevant:
+              - '**'
+              - '!**/*.md'
+              - '!LICENSE'
+
   autofix:
     name: Auto-fix formatting
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: detect-changes
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (needs.detect-changes.outputs.shell == 'true' || needs.detect-changes.outputs.python == 'true')
     permissions:
       contents: write
 
@@ -38,19 +76,25 @@ jobs:
           cache-dependency-glob: .github/workflows/ci.yml
 
       - name: Shell formatting (shfmt)
+        if: needs.detect-changes.outputs.shell == 'true'
         uses: mfinelli/setup-shfmt@v4.0.1
 
       - name: Apply auto-formatters
         run: |
           set -euo pipefail
-          mapfile -t sh_files < <(git ls-files '*.sh')
-          if [ "${#sh_files[@]}" -gt 0 ]; then
-            shfmt -w -i 2 -ci "${sh_files[@]}"
+
+          if [ "${{ needs.detect-changes.outputs.shell }}" == "true" ]; then
+            mapfile -t sh_files < <(git ls-files '*.sh')
+            if [ "${#sh_files[@]}" -gt 0 ]; then
+              shfmt -w -i 2 -ci "${sh_files[@]}"
+            fi
           fi
 
-          mapfile -t py_files < <(git ls-files '*.py')
-          if [ "${#py_files[@]}" -gt 0 ]; then
-            uvx ruff format "${py_files[@]}"
+          if [ "${{ needs.detect-changes.outputs.python }}" == "true" ]; then
+            mapfile -t py_files < <(git ls-files '*.py')
+            if [ "${#py_files[@]}" -gt 0 ]; then
+              uvx ruff format "${py_files[@]}"
+            fi
           fi
 
       - name: Commit formatting changes
@@ -64,8 +108,8 @@ jobs:
     name: Shell checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: autofix
-    if: always() && (needs.autofix.result == 'success' || needs.autofix.result == 'skipped')
+    needs: [detect-changes, autofix]
+    if: always() && needs.detect-changes.outputs.shell == 'true' && (needs.autofix.result == 'success' || needs.autofix.result == 'skipped')
 
     steps:
       - name: Checkout
@@ -94,8 +138,8 @@ jobs:
     name: Python checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: autofix
-    if: always() && (needs.autofix.result == 'success' || needs.autofix.result == 'skipped')
+    needs: [detect-changes, autofix]
+    if: always() && needs.detect-changes.outputs.python == 'true' && (needs.autofix.result == 'success' || needs.autofix.result == 'skipped')
 
     steps:
       - name: Checkout
@@ -141,8 +185,8 @@ jobs:
     name: YAML and actions checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: autofix
-    if: always() && (needs.autofix.result == 'success' || needs.autofix.result == 'skipped')
+    needs: [detect-changes, autofix]
+    if: always() && needs.detect-changes.outputs.yaml == 'true' && (needs.autofix.result == 'success' || needs.autofix.result == 'skipped')
 
     steps:
       - name: Checkout
@@ -174,8 +218,8 @@ jobs:
     name: Compose and security checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: autofix
-    if: always() && (needs.autofix.result == 'success' || needs.autofix.result == 'skipped')
+    needs: [detect-changes, autofix]
+    if: always() && needs.detect-changes.outputs.relevant == 'true' && (needs.autofix.result == 'success' || needs.autofix.result == 'skipped')
 
     steps:
       - name: Checkout
@@ -192,6 +236,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs:
+      - detect-changes
       - shell-checks
       - python-checks
       - yaml-actions-checks
@@ -202,7 +247,19 @@ jobs:
       - name: Verify required jobs passed
         run: |
           set -euo pipefail
-          [[ "${{ needs.shell-checks.result }}" == "success" ]]
-          [[ "${{ needs.python-checks.result }}" == "success" ]]
-          [[ "${{ needs.yaml-actions-checks.result }}" == "success" ]]
-          [[ "${{ needs.compose-security-checks.result }}" == "success" ]]
+
+          if [ "${{ needs.detect-changes.outputs.shell }}" == "true" ]; then
+            [[ "${{ needs.shell-checks.result }}" == "success" ]]
+          fi
+
+          if [ "${{ needs.detect-changes.outputs.python }}" == "true" ]; then
+            [[ "${{ needs.python-checks.result }}" == "success" ]]
+          fi
+
+          if [ "${{ needs.detect-changes.outputs.yaml }}" == "true" ]; then
+            [[ "${{ needs.yaml-actions-checks.result }}" == "success" ]]
+          fi
+
+          if [ "${{ needs.detect-changes.outputs.relevant }}" == "true" ]; then
+            [[ "${{ needs.compose-security-checks.result }}" == "success" ]]
+          fi
