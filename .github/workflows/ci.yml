@@ -23,35 +23,63 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install tooling
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install ruff yamllint
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
 
-      - name: Shell script syntax
-        run: bash -n scripts/*.sh
+      - name: Shell script syntax (all tracked .sh)
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git ls-files '*.sh')
+          if [ "${#files[@]}" -gt 0 ]; then
+            bash -n "${files[@]}"
+          fi
 
       - name: Shell formatting (shfmt)
         uses: mfinelli/setup-shfmt@v3
 
-      - name: Check shell formatting
-        run: shfmt -d -i 2 -ci scripts/*.sh
-
-      - name: Python formatting and lint (ruff)
+      - name: Check shell formatting (all tracked .sh)
         run: |
-          ruff format --check scripts/_generate_config.py
-          ruff check scripts/_generate_config.py
+          set -euo pipefail
+          mapfile -t files < <(git ls-files '*.sh')
+          if [ "${#files[@]}" -gt 0 ]; then
+            shfmt -d -i 2 -ci "${files[@]}"
+          fi
 
-      - name: Python type checking
-        run: python -m pip install mypy && mypy --strict scripts/_generate_config.py
-
-      - name: YAML validation
+      - name: Python formatting and lint (all tracked .py)
         run: |
-          yamllint -d '{extends: default, rules: {line-length: {max: 160}, document-start: disable}}' docker-compose.yml
-          yamllint -d '{extends: default, rules: {line-length: {max: 200}, document-start: disable}}' .github/workflows/ci.yml
+          set -euo pipefail
+          mapfile -t files < <(git ls-files '*.py')
+          if [ "${#files[@]}" -gt 0 ]; then
+            uvx ruff format --check "${files[@]}"
+            uvx ruff check "${files[@]}"
+          fi
+
+      - name: Python type checking (all tracked .py)
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git ls-files '*.py')
+          if [ "${#files[@]}" -gt 0 ]; then
+            uvx mypy --strict "${files[@]}"
+          fi
+
+      - name: YAML validation (all tracked .yml/.yaml)
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git ls-files '*.yml' '*.yaml')
+          if [ "${#files[@]}" -gt 0 ]; then
+            uvx yamllint -d '{extends: default, rules: {line-length: {max: 200}, document-start: disable}}' "${files[@]}"
+          fi
+
+      - name: GitHub Actions workflow lint
+        uses: rhysd/actionlint@v1
 
       - name: Python compile check
-        run: python -m py_compile scripts/_generate_config.py
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git ls-files '*.py')
+          if [ "${#files[@]}" -gt 0 ]; then
+            python -m py_compile "${files[@]}"
+          fi
 
       - name: Docker Compose render
         run: docker compose -f docker-compose.yml config > /tmp/compose.rendered.yaml
