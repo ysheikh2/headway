@@ -37,13 +37,14 @@ Request flow:
 
 - Kilo -> Headroom (`:4000`) -> LiteLLM (`:4001` host / `:4000` container)
   - `bedrock-*` aliases -> AWS Bedrock
-  - all other models (`*`) -> `github_copilot/*`
+  - `copilot-*` named aliases -> GitHub Copilot (auto-discovered from your account)
+  - all other models (`*`) -> `github_copilot/*` (wildcard fallback)
 
 Important semantics:
 
 - Headroom has a single upstream connection (LiteLLM).
 - LiteLLM handles both provider routes.
-- Copilot route uses wildcard to avoid frequent config churn as model permissions change.
+- Named `copilot-*` entries are generated dynamically by `generate-litellm-config.sh` from the live Copilot models API (chat-only, enabled, picker-visible). The wildcard catches anything not explicitly listed.
 
 Practical effect:
 
@@ -67,7 +68,7 @@ In this repo we avoid raw IDs in Kilo by using LiteLLM aliases in `litellm_confi
 - Do not rely on old model names (for example `gpt-4o` may not be available).
 - Use currently available Copilot models; tests should prefer low-cost models (for example `claude-haiku-4.5`) with fallback.
 - 403 errors usually mean token refresh is needed.
-- LiteLLM GitHub Copilot provider requires device-flow login on first use. Tokens persist in `.data/litellm`.
+- LiteLLM GitHub Copilot provider requires device-flow login on first use. Tokens persist in `/root/.config/litellm/github_copilot` inside the container (mounted as a named volume).
 
 ### AWS Bedrock
 
@@ -177,8 +178,9 @@ curl -sS http://127.0.0.1:4000/v1/models
 
 Should include:
 
-- bedrock aliases (for example `bedrock-claude-sonnet-4`)
-- `*` wildcard fallback for Copilot route
+- `bedrock-*` aliases (for example `bedrock-claude-sonnet-4`)
+- `copilot-*` named aliases (auto-discovered from your Copilot account)
+- `*` wildcard fallback for any other Copilot model
 
 ### Check Headroom health/stats
 
