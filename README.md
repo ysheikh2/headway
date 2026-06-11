@@ -11,6 +11,8 @@ Default local endpoint:
 
 - http://127.0.0.1:4000/v1
 
+Learn more about [Headroom](https://github.com/chopratejas/headroom) and [LiteLLM](https://github.com/BerriAI/litellm) at their Github repos.
+
 ## Request Flow
 
 Both providers are handled by LiteLLM, with Headroom as the single frontend:
