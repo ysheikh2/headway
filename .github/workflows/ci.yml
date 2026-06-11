@@ -9,10 +9,58 @@ permissions:
   contents: read
 
 jobs:
+  autofix:
+    name: Auto-fix formatting
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Shell formatting (shfmt)
+        uses: mfinelli/setup-shfmt@v3
+
+      - name: Apply auto-formatters
+        run: |
+          set -euo pipefail
+
+          mapfile -t sh_files < <(git ls-files '*.sh')
+          if [ "${#sh_files[@]}" -gt 0 ]; then
+            shfmt -w -i 2 -ci "${sh_files[@]}"
+          fi
+
+          mapfile -t py_files < <(git ls-files '*.py')
+          if [ "${#py_files[@]}" -gt 0 ]; then
+            uvx ruff format "${py_files[@]}"
+          fi
+
+      - name: Commit formatting changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore(ci): auto-format via GitHub Actions"
+          commit_user_name: github-actions[bot]
+          commit_user_email: 41898282+github-actions[bot]@users.noreply.github.com
+
   lint-and-validate:
     name: Lint, Type, Validate
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    needs: autofix
+    if: always() && (needs.autofix.result == 'success' || needs.autofix.result == 'skipped')
 
     steps:
       - name: Checkout
