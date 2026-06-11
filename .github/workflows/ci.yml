@@ -35,7 +35,7 @@ jobs:
           fi
 
       - name: Shell formatting (shfmt)
-        uses: mfinelli/setup-shfmt@v3
+        uses: mfinelli/setup-shfmt@v4
 
       - name: Check shell formatting (all tracked .sh)
         run: |
