@@ -23,7 +23,6 @@ jobs:
       shell: ${{ steps.filter.outputs.shell }}
       python: ${{ steps.filter.outputs.python }}
       yaml: ${{ steps.filter.outputs.yaml }}
-      compose: ${{ steps.filter.outputs.compose }}
       relevant: ${{ steps.filter.outputs.relevant }}
 
     steps:
@@ -42,74 +41,17 @@ jobs:
             yaml:
               - '**/*.yml'
               - '**/*.yaml'
-            compose:
-              - 'docker-compose.yml'
             relevant:
               - '**'
               - '!**/*.md'
               - '!LICENSE'
 
-  autofix:
-    name: Auto-fix formatting
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    needs: detect-changes
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (needs.detect-changes.outputs.shell == 'true' || needs.detect-changes.outputs.python == 'true')
-    permissions:
-      contents: write
-
-    steps:
-      - name: Checkout PR branch
-        uses: actions/checkout@v6.0.3
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v6.2.0
-        with:
-          python-version: "3.12"
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v8.2.0
-        with:
-          enable-cache: true
-          cache-dependency-glob: .github/workflows/ci.yml
-
-      - name: Shell formatting (shfmt)
-        if: needs.detect-changes.outputs.shell == 'true'
-        uses: mfinelli/setup-shfmt@v4.0.1
-
-      - name: Apply auto-formatters
-        run: |
-          set -euo pipefail
-
-          if [ "${{ needs.detect-changes.outputs.shell }}" == "true" ]; then
-            mapfile -t sh_files < <(git ls-files '*.sh')
-            if [ "${#sh_files[@]}" -gt 0 ]; then
-              shfmt -w -i 2 -ci "${sh_files[@]}"
-            fi
-          fi
-
-          if [ "${{ needs.detect-changes.outputs.python }}" == "true" ]; then
-            mapfile -t py_files < <(git ls-files '*.py')
-            if [ "${#py_files[@]}" -gt 0 ]; then
-              uvx ruff format "${py_files[@]}"
-            fi
-          fi
-
-      - name: Commit formatting changes
-        uses: stefanzweifel/git-auto-commit-action@v7.1.0
-        with:
-          commit_message: "chore(ci): auto-format via GitHub Actions"
-          commit_user_name: github-actions[bot]
-          commit_user_email: 41898282+github-actions[bot]@users.noreply.github.com
-
   shell-checks:
     name: Shell checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: [detect-changes, autofix]
-    if: always() && needs.detect-changes.outputs.shell == 'true' && (needs.autofix.result == 'success' || needs.autofix.result == 'skipped')
+    needs: detect-changes
+    if: needs.detect-changes.outputs.shell == 'true'
 
     steps:
       - name: Checkout
@@ -138,8 +80,8 @@ jobs:
     name: Python checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: [detect-changes, autofix]
-    if: always() && needs.detect-changes.outputs.python == 'true' && (needs.autofix.result == 'success' || needs.autofix.result == 'skipped')
+    needs: detect-changes
+    if: needs.detect-changes.outputs.python == 'true'
 
     steps:
       - name: Checkout
@@ -156,7 +98,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: .github/workflows/ci.yml
 
-      - name: Python formatting and lint (all tracked .py)
+      - name: Check Python formatting and lint (all tracked .py)
         run: |
           set -euo pipefail
           mapfile -t files < <(git ls-files '*.py')
@@ -185,8 +127,8 @@ jobs:
     name: YAML and actions checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: [detect-changes, autofix]
-    if: always() && needs.detect-changes.outputs.yaml == 'true' && (needs.autofix.result == 'success' || needs.autofix.result == 'skipped')
+    needs: detect-changes
+    if: needs.detect-changes.outputs.yaml == 'true'
 
     steps:
       - name: Checkout
@@ -218,8 +160,8 @@ jobs:
     name: Compose and security checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: [detect-changes, autofix]
-    if: always() && needs.detect-changes.outputs.relevant == 'true' && (needs.autofix.result == 'success' || needs.autofix.result == 'skipped')
+    needs: detect-changes
+    if: needs.detect-changes.outputs.relevant == 'true'
 
     steps:
       - name: Checkout
@@ -231,6 +173,77 @@ jobs:
       - name: Secret scan
         run: ./scripts/secret-scan.sh
 
+  autofix:
+    name: Auto-fix formatting
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [detect-changes, shell-checks, python-checks]
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (needs.shell-checks.result == 'failure' || needs.python-checks.result == 'failure')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v6.0.3
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: .github/workflows/ci.yml
+
+      - name: Shell formatting (shfmt)
+        if: needs.detect-changes.outputs.shell == 'true' && needs.shell-checks.result == 'failure'
+        uses: mfinelli/setup-shfmt@v4.0.1
+
+      - name: Apply auto-formatters only where checks failed
+        run: |
+          set -euo pipefail
+
+          if [ "${{ needs.detect-changes.outputs.shell }}" == "true" ] && [ "${{ needs.shell-checks.result }}" == "failure" ]; then
+            mapfile -t sh_files < <(git ls-files '*.sh')
+            if [ "${#sh_files[@]}" -gt 0 ]; then
+              shfmt -w -i 2 -ci "${sh_files[@]}"
+            fi
+          fi
+
+          if [ "${{ needs.detect-changes.outputs.python }}" == "true" ] && [ "${{ needs.python-checks.result }}" == "failure" ]; then
+            mapfile -t py_files < <(git ls-files '*.py')
+            if [ "${#py_files[@]}" -gt 0 ]; then
+              uvx ruff format "${py_files[@]}"
+            fi
+          fi
+
+      - name: Detect autofix changes
+        id: changed
+        run: |
+          if git diff --quiet; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit formatting changes
+        if: steps.changed.outputs.has_changes == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v7.1.0
+        with:
+          commit_message: "chore(ci): auto-format via GitHub Actions"
+          commit_user_name: github-actions[bot]
+          commit_user_email: 41898282+github-actions[bot]@users.noreply.github.com
+
+      - name: Fail if no auto-fixable changes were found
+        if: steps.changed.outputs.has_changes != 'true'
+        run: |
+          echo "Checks failed but no format-only changes were produced by autofix."
+          exit 1
+
   lint-and-validate:
     name: Lint, Type, Validate
     runs-on: ubuntu-latest
@@ -241,6 +254,7 @@ jobs:
       - python-checks
       - yaml-actions-checks
       - compose-security-checks
+      - autofix
     if: always()
 
     steps:
@@ -249,11 +263,17 @@ jobs:
           set -euo pipefail
 
           if [ "${{ needs.detect-changes.outputs.shell }}" == "true" ]; then
-            [[ "${{ needs.shell-checks.result }}" == "success" ]]
+            if [ "${{ needs.shell-checks.result }}" != "success" ] && [ "${{ needs.autofix.result }}" != "success" ]; then
+              echo "Shell checks failed and autofix did not succeed."
+              exit 1
+            fi
           fi
 
           if [ "${{ needs.detect-changes.outputs.python }}" == "true" ]; then
-            [[ "${{ needs.python-checks.result }}" == "success" ]]
+            if [ "${{ needs.python-checks.result }}" != "success" ] && [ "${{ needs.autofix.result }}" != "success" ]; then
+              echo "Python checks failed and autofix did not succeed."
+              exit 1
+            fi
           fi
 
           if [ "${{ needs.detect-changes.outputs.yaml }}" == "true" ]; then
