@@ -73,6 +73,28 @@ Run everything end-to-end in order (configure Kilo, start gateway, run tests, pr
 ./scripts/oneshot.sh
 ```
 
+## Stop the Stack
+
+Stop containers without removing data or tokens:
+
+```bash
+./scripts/stop.sh
+```
+
+## Uninstall and Cleanup
+
+Stop and remove the stack:
+
+```bash
+./scripts/uninstall.sh
+```
+
+Full cleanup (including runtime data and local Kilo gateway baseURL cleanup):
+
+```bash
+./scripts/uninstall.sh --yes --purge-data --cleanup-kilo
+```
+
 ## Security and Trust
 
 Run lightweight local secret scanning before publishing or opening a PR:
@@ -119,6 +141,19 @@ Provider routing should point to port 4000:
 }
 ```
 
+## VS Code Chat Integration
+
+Use these settings for chat tools that support OpenAI-compatible custom endpoints:
+
+1. Add a custom model/provider using `OpenAI` (or `OpenAI-compatible`) in the tool UI.
+2. Set base URL to `http://127.0.0.1:4000/v1`.
+3. Set API key to `local` (or any non-empty placeholder expected by the UI).
+4. Use model names exposed by this gateway:
+  - Copilot route: `claude-haiku-4.5`, `gemini-3.5-flash`, etc.
+  - Bedrock route: `bedrock-*` aliases from `/v1/models`.
+
+Important: Native GitHub Copilot Chat in VS Code does not provide a standard custom `baseURL` override for replacing GitHub backend calls. For gateway usage in VS Code, prefer chat tools/providers that support OpenAI-compatible endpoint configuration.
+
 ## Model Notes
 
 - Do not rely on older aliases like gpt-4o if your Copilot account no longer exposes them.
@@ -156,10 +191,12 @@ complete that login once. After success, tokens persist in `.data/litellm` and r
 ## Scripts
 
 - scripts/start.sh: refresh creds, pull images, start stack
+- scripts/stop.sh: stop the running stack (preserves volumes and tokens)
 - scripts/auth-fix.sh: refresh AWS auth, restart stack, and print Copilot device code hints if needed
 - scripts/setup-kilo.sh: enforce Kilo provider baseURLs for this gateway
 - scripts/oneshot.sh: one-command bootstrap for new users (setup, start, test, status)
 - scripts/secret-scan.sh: lightweight secrets scan before publishing
+- scripts/uninstall.sh: remove stack with optional deep cleanup flags
 - scripts/generate-litellm-config.sh: auto-discover Bedrock models in EU regions and write litellm_config.yaml
 - scripts/status.sh: container health, models, config checks, AWS status, Headroom stats
 - scripts/test.sh: end-to-end smoke tests for Copilot and Bedrock (cheap model preference)
@@ -186,12 +223,12 @@ aws sso login --profile d2i_stg
 docker compose down
 docker compose up -d
 docker logs litellm-gateway --tail 100
-docker logs headroom-kilo --tail 100
+docker logs headroom-gateway --tail 100
 ```
 
 ## Compose Services
 
-- headroom-kilo: ghcr.io/chopratejas/headroom:code on 127.0.0.1:4000
+- headroom-gateway: ghcr.io/chopratejas/headroom:code on 127.0.0.1:4000
 - litellm-gateway: ghcr.io/berriai/litellm:main-stable on 127.0.0.1:4001
 
 Both are managed from docker-compose.yml.

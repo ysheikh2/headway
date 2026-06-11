@@ -67,7 +67,7 @@ echo
 # ── Stop old containers ────────────────────────────────────────────────────────
 echo "[ Stopping existing containers ]"
 docker compose -f "$COMPOSE" down 2>/dev/null || true
-docker rm -f headroom-kilo 2>/dev/null || true
+docker rm -f headroom-gateway 2>/dev/null || true
 docker rm -f litellm-gateway 2>/dev/null || true
 echo
 
@@ -91,7 +91,7 @@ done
 
 if [[ -z "${LIVE:-}" ]]; then
     echo "  WARNING: Gateway did not respond within 60s. Check logs:"
-    echo "  docker logs headroom-kilo"
+    echo "  docker logs headroom-gateway"
     echo "  docker logs litellm-gateway"
     CODE_LINE=$(docker logs litellm-gateway 2>/dev/null | grep -E 'Please visit https://github.com/login/device and enter code' | tail -1 || true)
     if [[ -n "$CODE_LINE" ]]; then

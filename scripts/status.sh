@@ -35,10 +35,10 @@ if docker ps --format '{{.Names}}' | grep -q "^litellm-gateway$"; then
 else
     echo "  litellm-gateway: NOT RUNNING"
 fi
-if docker ps --format '{{.Names}}' | grep -q "^headroom-kilo$"; then
-    docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}' | grep headroom-kilo
+if docker ps --format '{{.Names}}' | grep -q "^headroom-gateway$"; then
+    docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}' | grep headroom-gateway
 else
-    echo "  headroom-kilo: NOT RUNNING"
+    echo "  headroom-gateway: NOT RUNNING"
 fi
 if ! docker ps --format '{{.Names}}' | grep -q "^litellm-gateway$"; then
     echo "  To start: cd $DIR && ./scripts/start.sh"

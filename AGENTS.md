@@ -18,7 +18,7 @@ Kilo endpoint used by both providers:
 
 ### Containers
 
-1. `headroom-kilo`
+1. `headroom-gateway`
 - Image: `ghcr.io/chopratejas/headroom:code`
 - Port: `127.0.0.1:4000` (container `:8787`)
 - Upstream: LiteLLM (`http://litellm:4000/v1`)
@@ -81,10 +81,12 @@ In this repo we avoid raw IDs in Kilo by using LiteLLM aliases in `litellm_confi
 - `litellm_config.yaml` - auto-generated model aliases and route policy
 - `scripts/generate-litellm-config.sh` - discovers Bedrock models in EU regions and writes `litellm_config.yaml` (one alias per model, ACTIVE-only)
 - `scripts/start.sh` - refresh auth, pull images, start stack
+- `scripts/stop.sh` - stop the running stack (preserves volumes and tokens)
 - `scripts/auth-fix.sh` - refresh AWS auth and restart (prints Copilot device-code hints if pending)
 - `scripts/setup-kilo.sh` - enforce Kilo provider baseURLs for this gateway
 - `scripts/oneshot.sh` - one-command bootstrap for new users (setup, start, test, status)
 - `scripts/secret-scan.sh` - lightweight local secret scan before publish
+- `scripts/uninstall.sh` - stop/remove stack with optional deep cleanup
 - `scripts/status.sh` - health, models, config, AWS status, headroom stats
 - `scripts/test.sh` - end-to-end smoke tests (Copilot + Bedrock)
 - `scripts/stats.sh` - concise savings/cost/cache/latency report
@@ -103,6 +105,12 @@ In this repo we avoid raw IDs in Kilo by using LiteLLM aliases in `litellm_confi
 
 ```bash
 ./scripts/start.sh
+```
+
+### Stop the stack
+
+```bash
+./scripts/stop.sh
 ```
 
 ### Fix auth issues (Copilot 403, Bedrock auth failure)
@@ -141,6 +149,13 @@ In this repo we avoid raw IDs in Kilo by using LiteLLM aliases in `litellm_confi
 ./scripts/secret-scan.sh
 ```
 
+### Uninstall and cleanup
+
+```bash
+./scripts/uninstall.sh
+./scripts/uninstall.sh --yes --purge-data --cleanup-kilo
+```
+
 ## Diagnostics
 
 ### Check containers
@@ -152,7 +167,7 @@ docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 Expected healthy containers:
 
 - `litellm-gateway`
-- `headroom-kilo`
+- `headroom-gateway`
 
 ### Check LiteLLM models
 
