@@ -10,7 +10,15 @@ import json
 import os
 import re
 import sys
+import urllib.error
 import urllib.request
+
+if len(sys.argv) < 3:
+    print(
+        "Usage: _generate_config.py <tmp_dir> <output_file> [copilot_token_file]",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 tmp_dir = sys.argv[1]
 output_file = sys.argv[2]
@@ -85,7 +93,7 @@ for name in sorted(os.listdir(tmp_dir)):
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-    except Exception:
+    except (OSError, json.JSONDecodeError):
         continue
 
     region = region_from_filename(path)
@@ -121,7 +129,7 @@ for name in sorted(os.listdir(tmp_dir)):
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-    except Exception:
+    except (OSError, json.JSONDecodeError):
         continue
 
     region = region_from_filename(path)
@@ -192,7 +200,16 @@ def fetch_copilot_models(token_file: str) -> list[str]:
     try:
         with open(token_file) as fh:
             key_data = json.load(fh)
-        token = key_data.get("token") or key_data.get("api_key") or next(iter(key_data.values()))
+        token = key_data.get("token") or key_data.get("api_key")
+        if not token:
+            if isinstance(key_data, dict):
+                for value in key_data.values():
+                    if isinstance(value, str) and value.strip():
+                        token = value.strip()
+                        break
+        if not token:
+            print(f"[generator] WARNING: no usable token in {token_file}; skipping named Copilot entries")
+            return []
         req = urllib.request.Request(
             "https://api.githubcopilot.com/models",
             headers={
@@ -217,7 +234,13 @@ def fetch_copilot_models(token_file: str) -> list[str]:
 
         print(f"[generator] Copilot chat models (enabled, picker): {len(models)}")
         return models
-    except Exception as exc:
+    except urllib.error.HTTPError as exc:
+        print(f"[generator] WARNING: Copilot model API HTTP error ({exc.code}); skipping named entries")
+        return []
+    except urllib.error.URLError as exc:
+        print(f"[generator] WARNING: Copilot model API network error ({exc.reason}); skipping named entries")
+        return []
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
         print(f"[generator] WARNING: could not fetch Copilot models ({exc}); skipping named entries")
         return []
 

@@ -20,6 +20,7 @@ fi
 python3 - <<'PY'
 import json
 import os
+import re
 from pathlib import Path
 
 kilo_conf = Path(os.path.expanduser("~/.config/kilo/kilo.jsonc"))
@@ -28,6 +29,8 @@ data = {}
 if kilo_conf.exists():
     text = kilo_conf.read_text(encoding="utf-8").strip()
     if text:
+        text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+        text = re.sub(r"(^|\s)//.*$", "", text, flags=re.M)
         data = json.loads(text)
 
 provider = data.setdefault("provider", {})

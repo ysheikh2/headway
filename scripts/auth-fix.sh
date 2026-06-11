@@ -52,7 +52,12 @@ echo
 # ── Generate LiteLLM config from Bedrock model discovery ─────────────────────
 echo "[ Generating litellm_config.yaml from AWS Bedrock ]"
 if ! bash "$GENERATOR" --aws-profile "$AWS_PROFILE_NAME" --output "$DIR/litellm_config.yaml"; then
-    echo "  WARNING: generation failed; continuing with existing litellm_config.yaml"
+    echo "  WARNING: generation failed"
+    if [[ ! -s "$DIR/litellm_config.yaml" ]]; then
+        echo "  ERROR: missing or empty litellm_config.yaml and generation failed"
+        exit 1
+    fi
+    echo "  Continuing with existing litellm_config.yaml"
 fi
 echo
 
