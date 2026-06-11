@@ -1,11 +1,13 @@
-# LiteLLM + Headroom Gateway for Kilo
+# LiteLLM + Headroom Gateway (Kilo + Any OpenAI-Compatible Client)
 
-This repository runs a local two-container gateway so Kilo can use both providers through one endpoint:
+This repository runs a local two-container gateway so clients can use both providers through one endpoint:
 
 - GitHub Copilot (via Headroom proxy compression)
 - AWS Bedrock (via LiteLLM with AWS profile auth)
 
-Kilo points to one base URL:
+Primary usage in this repo is Kilo, but any client/extension that supports an OpenAI-compatible `baseURL` can use the same endpoint.
+
+Default local endpoint:
 
 - http://127.0.0.1:4000/v1
 
@@ -26,6 +28,7 @@ Why this topology:
 ## Why this setup
 
 - One endpoint in Kilo for both providers
+- Also works for other OpenAI-compatible editors/CLI tools/extensions
 - Copilot traffic still goes through Headroom compression
 - Bedrock works with normal AWS SSO/profile auth
 - No custom local Python/pipx/npm install required
@@ -155,6 +158,15 @@ Use these settings for chat tools that support OpenAI-compatible custom endpoint
   - Bedrock route: `bedrock-*` aliases from `/v1/models`.
 
 Important: Native GitHub Copilot Chat in VS Code does not provide a standard custom `baseURL` override for replacing GitHub backend calls. For gateway usage in VS Code, prefer chat tools/providers that support OpenAI-compatible endpoint configuration.
+
+## Other Clients
+
+Any client that supports an OpenAI-compatible API endpoint can use this gateway by setting:
+
+- base URL: `http://127.0.0.1:4000/v1`
+- API key: `local` (or any non-empty placeholder if the client requires one)
+
+Examples include editor extensions, CLI tools, local app backends, and custom scripts that can target OpenAI-compatible chat/completions endpoints.
 
 ## Model Notes
 

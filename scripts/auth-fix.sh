@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # auth-fix.sh — Fix 403 auth errors for GitHub Copilot or AWS Bedrock.
 #
-# Run this when Kilo shows:
+# Run this when your client shows:
 #   "Please reauthenticate with the copilot provider..."
 #   statusCode: 403, "unauthorized: not authorized to use this Copilot feature"
 #
@@ -136,7 +136,7 @@ fi
 echo
 
 echo "=== Auth fix complete ==="
-echo "Restart Kilo to pick up the fresh connection."
+echo "Restart your client to pick up the fresh connection."
 echo
 echo "  Gateway: $GATEWAY/health/liveliness"
 echo "  Gateway: $GATEWAY/livez"

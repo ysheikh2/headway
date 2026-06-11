@@ -22,7 +22,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-echo "=== One-Shot Bootstrap (Kilo + Gateway) ==="
+echo "=== One-Shot Bootstrap (Gateway) ==="
 echo
 
 bash "$DIR/scripts/setup-kilo.sh"
@@ -38,4 +38,4 @@ bash "$DIR/scripts/status.sh"
 echo
 
 echo "=== Complete ==="
-echo "Kilo providers now point to: http://127.0.0.1:4000/v1"
+echo "Configured providers now point to: http://127.0.0.1:4000/v1"
