@@ -21,21 +21,16 @@ jobs:
     steps:
       - name: Resolve PR number
         id: pr
+        env:
+          PRS_JSON: ${{ toJson(github.event.check_suite.pull_requests) }}
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "pull_request_target" ]; then
             echo "number=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
           elif [ "${{ github.event_name }}" = "check_suite" ]; then
-            prs='${{ toJson(github.event.check_suite.pull_requests) }}'
-            python - <<'PY' >> "$GITHUB_OUTPUT"
-import json, os
-prs = json.loads(os.environ["PRS_JSON"]) if os.environ.get("PRS_JSON") else []
-if prs:
-    print(f"number={prs[0]['number']}")
-PY
+            number=$(python -c 'import json,os; prs=json.loads(os.environ.get("PRS_JSON") or "[]"); print(prs[0]["number"] if prs else "")')
+            echo "number=$number" >> "$GITHUB_OUTPUT"
           fi
-        env:
-          PRS_JSON: ${{ toJson(github.event.check_suite.pull_requests) }}
 
       - name: Exit when no PR found
         if: steps.pr.outputs.number == ''
@@ -49,27 +44,10 @@ PY
           PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
           set -euo pipefail
-          pr_json=$(gh api "repos/$REPO/pulls/$PR_NUMBER")
-          base_ref=$(python - <<'PY'
-import json,sys
-print(json.load(sys.stdin)['base']['ref'])
-PY
-<<< "$pr_json")
-          draft=$(python - <<'PY'
-import json,sys
-print(str(json.load(sys.stdin)['draft']).lower())
-PY
-<<< "$pr_json")
-          author=$(python - <<'PY'
-import json,sys
-print(json.load(sys.stdin)['user']['login'])
-PY
-<<< "$pr_json")
-          labels=$(python - <<'PY'
-import json,sys
-print(','.join([x['name'] for x in json.load(sys.stdin).get('labels',[])]))
-PY
-<<< "$pr_json")
+          base_ref=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.base.ref')
+          draft=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.draft')
+          author=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.user.login')
+          labels=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.labels[].name' 2>/dev/null | paste -sd, - || true)
 
           ok=true
           if [ "$base_ref" != "main" ]; then ok=false; fi
