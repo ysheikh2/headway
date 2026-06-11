@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# test.sh — Smoke tests LiteLLM+headroom gateway.
-# Run any time you want verify gateway working end-to-end.
+# test.sh — Smoke tests LiteLLM+Headroom gateway.
+# Run anytime to verify end-to-end gateway health.
 #
 # Tests:
 # 1. Docker containers running
 # 2. Gateway liveness endpoint responds
 # 3. Gateway/LiteLLM model list reachable
-# 4. GitHub Copilot request goes through (cheap model preferred)
-# 5. Bedrock request goes through (auto-discovered bedrock-* alias)
+# 4. GitHub Copilot request goes through (lowest-cost preferred)
+# 5. Bedrock request goes through (lowest-cost preferred)
 # 6. Kilo config correct baseURL
 
 set -euo pipefail
@@ -47,6 +47,36 @@ fail() {
 info() { echo "         $*"; }
 
 cleanup_files=()
+make_tmp() {
+  local tmp
+  tmp=$(mktemp /tmp/gateway-test-XXXXXX)
+  cleanup_files+=("$tmp")
+  echo "$tmp"
+}
+
+run_chat_completion() {
+  local model="$1"
+  local prompt="$2"
+  local max_tokens="$3"
+  local outfile="$4"
+
+  HTTP_CODE=$(curl -s -o "$outfile" -w "%{http_code}" --max-time 50 \
+    "$GATEWAY/v1/chat/completions" \
+    -H "Content-Type: application/json" \
+    -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"$prompt\"}],\"max_tokens\":$max_tokens,\"stream\":false}" \
+    2>/dev/null || echo "000")
+}
+
+response_has_choices() {
+  local file="$1"
+  python3 -c "import json,sys; d=json.load(open('$file')); sys.exit(0 if d.get('choices') else 1)" 2>/dev/null
+}
+
+response_first_content() {
+  local file="$1"
+  python3 -c "import json; d=json.load(open('$file')); c=d.get('choices',[]); print((c[0]['message'].get('content','') if c else '').strip())" 2>/dev/null || echo ""
+}
+
 cleanup() {
   local f
   for f in "${cleanup_files[@]:-}"; do
@@ -106,11 +136,58 @@ fi
 echo
 
 # --- Test 4: GitHub Copilot end-to-end ---
-echo "[ Test 4: GitHub Copilot end-to-end (cheap model preferred) ]"
-TMPFILE=$(mktemp /tmp/gateway-test-XXXXXX)
-cleanup_files+=("$TMPFILE")
+echo "[ Test 4: GitHub Copilot end-to-end (lowest-cost model preferred) ]"
+TMPFILE=$(make_tmp)
 HTTP_CODE="000"
-COPILOT_CANDIDATES=("claude-haiku-4.5" "gemini-3-flash" "gpt-5-mini" "claude-sonnet-4.6")
+COPILOT_CANDIDATES=()
+
+COPILOT_FROM_MODELS=$(echo "$MODELS" | python3 -c '
+import json,sys,re
+try:
+    data = json.load(sys.stdin).get("data", [])
+except Exception:
+    print("")
+    raise SystemExit(0)
+
+ids = [m.get("id", "") for m in data if m.get("id")]
+pool = [x for x in ids if x.startswith("copilot-")]
+
+# Strict, cheapest-first allowlist only (no heuristic fallback).
+preferred = [
+    "copilot-gpt-5-mini",
+    "copilot-gemini-3-flash",
+    "copilot-gemini-3-flash-preview",
+    "copilot-claude-haiku-4-5",
+]
+selected = [p for p in preferred if p in pool]
+print("\n".join(selected))
+' 2>/dev/null || echo "")
+
+if [[ -n "$COPILOT_FROM_MODELS" ]]; then
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && COPILOT_CANDIDATES+=("$line")
+  done <<<"$COPILOT_FROM_MODELS"
+fi
+
+# De-duplicate while preserving order (portable with bash 3 + set -u).
+if [[ ${#COPILOT_CANDIDATES[@]} -gt 0 ]]; then
+  COPILOT_DEDUPED=$(printf '%s\n' "${COPILOT_CANDIDATES[@]}" | python3 -c '
+import sys
+seen=set()
+out=[]
+for line in sys.stdin:
+    x=line.strip()
+    if x and x not in seen:
+        seen.add(x)
+        out.append(x)
+print("\n".join(out))
+')
+  COPILOT_CANDIDATES=()
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && COPILOT_CANDIDATES+=("$line")
+  done <<<"$COPILOT_DEDUPED"
+fi
+
 COPILOT_TEST_MODEL=""
 
 for CANDIDATE in "${COPILOT_CANDIDATES[@]}"; do
@@ -122,11 +199,7 @@ for CANDIDATE in "${COPILOT_CANDIDATES[@]}"; do
       sleep 5
     }
 
-    HTTP_CODE=$(curl -s -o "$TMPFILE" -w "%{http_code}" --max-time 45 \
-      "$GATEWAY/v1/chat/completions" \
-      -H "Content-Type: application/json" \
-      -d "{\"model\":\"$COPILOT_TEST_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with single word: COPILOTOK\"}],\"max_tokens\":10,\"stream\":false}" \
-      2>/dev/null || echo "000")
+    run_chat_completion "$COPILOT_TEST_MODEL" "Reply with single word: COPILOTOK" 10 "$TMPFILE"
 
     [[ "$HTTP_CODE" != "502" && "$HTTP_CODE" != "429" ]] && break
   done
@@ -146,8 +219,8 @@ for CANDIDATE in "${COPILOT_CANDIDATES[@]}"; do
   break
 done
 
-if [[ "$HTTP_CODE" == "200" ]] && python3 -c "import json,sys; d=json.load(open('$TMPFILE')); sys.exit(0 if d.get('choices') else 1)" 2>/dev/null; then
-  CONTENT=$(python3 -c "import json; d=json.load(open('$TMPFILE')); c=d.get('choices',[]); print((c[0]['message'].get('content','') if c else '').strip())" 2>/dev/null || echo "")
+if [[ "$HTTP_CODE" == "200" ]] && response_has_choices "$TMPFILE"; then
+  CONTENT=$(response_first_content "$TMPFILE")
   if [[ -n "$CONTENT" ]]; then
     ok "Copilot response using $COPILOT_TEST_MODEL: \"$CONTENT\" (HTTP $HTTP_CODE)"
   else
@@ -174,7 +247,17 @@ except Exception:
     print('')
     raise SystemExit(0)
 ids=[m.get('id','') for m in data]
+
+# Prefer explicitly cheapest aliases from current AWS Pricing + current alias inventory.
 preferred=[
+  'bedrock-mistral-voxtral-mini-3b-2507',
+  'bedrock-google-gemma-3-4b-it',
+  'bedrock-mistral-ministral-3-3b-instruct',
+  'bedrock-eu-amazon-nova-micro-v1-0',
+  'bedrock-eu-amazon-nova-2-lite-v1-0',
+  'bedrock-global-amazon-nova-2-lite-v1-0',
+  'bedrock-eu-amazon-nova-lite-v1-0',
+  'bedrock-openai-gpt-oss-20b-1-0',
   'bedrock-eu-anthropic-claude-haiku-4-5-20251001-v1-0',
   'bedrock-global-anthropic-claude-haiku-4-5-20251001-v1-0',
 ]
@@ -182,8 +265,7 @@ for p in preferred:
     if p in ids:
         print(p)
         raise SystemExit(0)
-candidates=[m for m in ids if m.startswith('bedrock-')]
-print(candidates[0] if candidates else '')
+print('')
 " 2>/dev/null || echo "")
 
 if [[ -z "$BEDROCK_TEST_MODEL" ]]; then
@@ -191,17 +273,12 @@ if [[ -z "$BEDROCK_TEST_MODEL" ]]; then
   info "Fix: ./scripts/start.sh (regenerates litellm_config.yaml from AWS Bedrock)"
   echo
 else
-  echo "[ Test 5: AWS Bedrock end-to-end ($BEDROCK_TEST_MODEL) ]"
-  TMPFILE=$(mktemp /tmp/gateway-test-XXXXXX)
-  cleanup_files+=("$TMPFILE")
-  HTTP_CODE=$(curl -s -o "$TMPFILE" -w "%{http_code}" --max-time 50 \
-    "$GATEWAY/v1/chat/completions" \
-    -H "Content-Type: application/json" \
-    -d "{\"model\":\"$BEDROCK_TEST_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with the single word: BEDROCKOK\"}],\"max_tokens\":8,\"stream\":false}" \
-    2>/dev/null || echo "000")
+  echo "[ Test 5: AWS Bedrock end-to-end (lowest-cost model preferred: $BEDROCK_TEST_MODEL) ]"
+  TMPFILE=$(make_tmp)
+  run_chat_completion "$BEDROCK_TEST_MODEL" "Reply with the single word: BEDROCKOK" 8 "$TMPFILE"
 
-  if [[ "$HTTP_CODE" == "200" ]] && python3 -c "import json,sys; d=json.load(open('$TMPFILE')); sys.exit(0 if d.get('choices') else 1)" 2>/dev/null; then
-    CONTENT=$(python3 -c "import json; d=json.load(open('$TMPFILE')); print(d['choices'][0]['message'].get('content','').strip())" 2>/dev/null || echo "?")
+  if [[ "$HTTP_CODE" == "200" ]] && response_has_choices "$TMPFILE"; then
+    CONTENT=$(response_first_content "$TMPFILE")
     ok "Bedrock response: \"$CONTENT\" (HTTP $HTTP_CODE)"
   else
     ERR=$(python3 -c "import json; d=json.load(open('$TMPFILE')); print(str(d)[:200])" 2>/dev/null || head -c 200 "$TMPFILE")
