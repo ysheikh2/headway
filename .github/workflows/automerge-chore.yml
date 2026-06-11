@@ -3,8 +3,6 @@ name: Automerge Chore PRs
 "on":
   pull_request_target:
     types: [opened, reopened, synchronize, labeled, ready_for_review]
-  check_suite:
-    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -13,57 +11,19 @@ permissions:
 
 jobs:
   enable-automerge:
-    name: Enable automerge for eligible chore PRs
+    name: Enable automerge
     runs-on: ubuntu-latest
-    if: >-
-      github.event_name == 'pull_request_target' ||
-      github.event_name == 'check_suite'
+    if: >
+      (github.actor == 'dependabot[bot]' || github.actor == 'renovate[bot]') &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.draft == false &&
+      (contains(github.event.pull_request.labels.*.name, 'chore') || contains(github.event.pull_request.labels.*.name, 'dependencies')) &&
+      !contains(github.event.pull_request.labels.*.name, 'do-not-merge') &&
+      !contains(github.event.pull_request.labels.*.name, 'security')
     steps:
-      - name: Resolve PR number
-        id: pr
-        env:
-          PRS_JSON: ${{ toJson(github.event.check_suite.pull_requests) }}
-        run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" = "pull_request_target" ]; then
-            echo "number=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event_name }}" = "check_suite" ]; then
-            number=$(python -c 'import json,os; prs=json.loads(os.environ.get("PRS_JSON") or "[]"); print(prs[0]["number"] if prs else "")')
-            echo "number=$number" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Exit when no PR found
-        if: steps.pr.outputs.number == ''
-        run: exit 0
-
-      - name: Check PR eligibility
-        id: gate
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ steps.pr.outputs.number }}
-        run: |
-          set -euo pipefail
-          base_ref=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.base.ref')
-          draft=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.draft')
-          author=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.user.login')
-          labels=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.labels[].name' 2>/dev/null | paste -sd, - || true)
-
-          ok=true
-          if [ "$base_ref" != "main" ]; then ok=false; fi
-          if [ "$draft" != "false" ]; then ok=false; fi
-          if [[ ",$labels," != *,chore,* && ",$labels," != *,dependencies,* ]]; then ok=false; fi
-          if [[ ",$labels," == *,do-not-merge,* || ",$labels," == *,security,* ]]; then ok=false; fi
-          if [ "$author" != "dependabot[bot]" ] && [ "$author" != "renovate[bot]" ]; then ok=false; fi
-
-          echo "ok=$ok" >> "$GITHUB_OUTPUT"
-
       - name: Enable automerge (squash)
-        if: steps.gate.outputs.ok == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
           set -euo pipefail
-          gh pr merge "$PR_NUMBER" --repo "$REPO" --auto --squash
+          gh pr merge "${{ github.event.pull_request.html_url }}" --auto --squash
