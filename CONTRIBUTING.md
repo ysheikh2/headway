@@ -23,7 +23,7 @@ Thanks for helping improve this gateway.
 
 - Keep changes small and focused.
 - Preserve stable routing behavior:
-  - Kilo -> Headroom (:4000) -> LiteLLM (:4001)
+  - Client -> Headroom (:4000) -> LiteLLM (:4001)
 - Do not commit secrets or runtime cache/state files.
 - Keep README/AGENTS docs in sync with behavior changes.
 - Open PRs against `main`; branch protection requires passing CI before merge.

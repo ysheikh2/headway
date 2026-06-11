@@ -1,0 +1,32 @@
+name: Stale Chore Cleanup
+
+"on":
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    name: Mark and close stale chore items
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mark stale and close
+        uses: actions/stale@v10.3.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          days-before-stale: 21
+          days-before-close: 7
+          stale-issue-label: stale
+          stale-pr-label: stale
+          stale-issue-message: "This chore issue has been inactive for 21 days and is marked stale. It will close in 7 days."
+          stale-pr-message: "This chore PR has been inactive for 21 days and is marked stale. It will close in 7 days."
+          close-issue-message: "Closing stale chore issue due to inactivity."
+          close-pr-message: "Closing stale chore PR due to inactivity."
+          only-labels: chore,dependencies
+          exempt-issue-labels: pinned,security
+          exempt-pr-labels: pinned,security,do-not-merge
+          operations-per-run: 200
