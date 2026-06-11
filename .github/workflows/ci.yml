@@ -1,6 +1,9 @@
 name: CI
 
-on:
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+"on":
   pull_request:
   push:
     branches: [main]
@@ -9,16 +12,19 @@ permissions:
   contents: read
 
 jobs:
-  lint-and-validate:
-    name: Lint, Type, Validate
+  autofix:
+    name: Auto-fix formatting
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       contents: write
 
     steps:
-      - name: Checkout
+      - name: Checkout PR branch
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -26,21 +32,15 @@ jobs:
           python-version: "3.12"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
-
-      - name: Shell script syntax (all tracked .sh)
-        run: |
-          set -euo pipefail
-          mapfile -t files < <(git ls-files '*.sh')
-          if [ "${#files[@]}" -gt 0 ]; then
-            bash -n "${files[@]}"
-          fi
+        uses: astral-sh/setup-uv@v8
+        with:
+          enable-cache: true
+          cache-dependency-glob: .github/workflows/ci.yml
 
       - name: Shell formatting (shfmt)
         uses: mfinelli/setup-shfmt@v4
 
-      - name: Apply auto-formatters (same-repo PRs only)
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+      - name: Apply auto-formatters
         run: |
           set -euo pipefail
           mapfile -t sh_files < <(git ls-files '*.sh')
@@ -53,13 +53,34 @@ jobs:
             uvx ruff format "${py_files[@]}"
           fi
 
-      - name: Commit formatting changes (same-repo PRs only)
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        uses: stefanzweifel/git-auto-commit-action@v5
+      - name: Commit formatting changes
+        uses: stefanzweifel/git-auto-commit-action@v7
         with:
           commit_message: "chore(ci): auto-format via GitHub Actions"
           commit_user_name: github-actions[bot]
           commit_user_email: 41898282+github-actions[bot]@users.noreply.github.com
+
+  shell-checks:
+    name: Shell checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: autofix
+    if: always() && (needs.autofix.result == 'success' || needs.autofix.result == 'skipped')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Shell formatting (shfmt)
+        uses: mfinelli/setup-shfmt@v4
+
+      - name: Shell script syntax (all tracked .sh)
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git ls-files '*.sh')
+          if [ "${#files[@]}" -gt 0 ]; then
+            bash -n "${files[@]}"
+          fi
 
       - name: Check shell formatting (all tracked .sh)
         run: |
@@ -68,6 +89,28 @@ jobs:
           if [ "${#files[@]}" -gt 0 ]; then
             shfmt -d -i 2 -ci "${files[@]}"
           fi
+
+  python-checks:
+    name: Python checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: autofix
+    if: always() && (needs.autofix.result == 'success' || needs.autofix.result == 'skipped')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          enable-cache: true
+          cache-dependency-glob: .github/workflows/ci.yml
 
       - name: Python formatting and lint (all tracked .py)
         run: |
@@ -86,6 +129,36 @@ jobs:
             uvx ty check "${files[@]}"
           fi
 
+      - name: Python compile check
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git ls-files '*.py')
+          if [ "${#files[@]}" -gt 0 ]; then
+            python -m py_compile "${files[@]}"
+          fi
+
+  yaml-actions-checks:
+    name: YAML and actions checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: autofix
+    if: always() && (needs.autofix.result == 'success' || needs.autofix.result == 'skipped')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          enable-cache: true
+          cache-dependency-glob: .github/workflows/ci.yml
+
       - name: YAML validation (all tracked .yml/.yaml)
         run: |
           set -euo pipefail
@@ -95,18 +168,41 @@ jobs:
           fi
 
       - name: GitHub Actions workflow lint
-        uses: docker://rhysd/actionlint:latest
+        uses: docker://rhysd/actionlint:1.7.12
 
-      - name: Python compile check
-        run: |
-          set -euo pipefail
-          mapfile -t files < <(git ls-files '*.py')
-          if [ "${#files[@]}" -gt 0 ]; then
-            python -m py_compile "${files[@]}"
-          fi
+  compose-security-checks:
+    name: Compose and security checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: autofix
+    if: always() && (needs.autofix.result == 'success' || needs.autofix.result == 'skipped')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
 
       - name: Docker Compose render
         run: docker compose -f docker-compose.yml config > /tmp/compose.rendered.yaml
 
       - name: Secret scan
         run: ./scripts/secret-scan.sh
+
+  lint-and-validate:
+    name: Lint, Type, Validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs:
+      - shell-checks
+      - python-checks
+      - yaml-actions-checks
+      - compose-security-checks
+    if: always()
+
+    steps:
+      - name: Verify required jobs passed
+        run: |
+          set -euo pipefail
+          [[ "${{ needs.shell-checks.result }}" == "success" ]]
+          [[ "${{ needs.python-checks.result }}" == "success" ]]
+          [[ "${{ needs.yaml-actions-checks.result }}" == "success" ]]
+          [[ "${{ needs.compose-security-checks.result }}" == "success" ]]
