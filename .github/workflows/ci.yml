@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-validate:
+    name: Lint, Type, Validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ruff yamllint
+
+      - name: Shell script syntax
+        run: bash -n scripts/*.sh
+
+      - name: Shell formatting (shfmt)
+        uses: mfinelli/setup-shfmt@v3
+
+      - name: Check shell formatting
+        run: shfmt -d -i 2 -ci scripts/*.sh
+
+      - name: Python formatting and lint (ruff)
+        run: |
+          ruff format --check scripts/_generate_config.py
+          ruff check scripts/_generate_config.py
+
+      - name: Python type checking
+        run: python -m pip install mypy && mypy --strict scripts/_generate_config.py
+
+      - name: YAML validation
+        run: |
+          yamllint -d '{extends: default, rules: {line-length: {max: 160}, document-start: disable}}' docker-compose.yml
+          yamllint -d '{extends: default, rules: {line-length: {max: 200}, document-start: disable}}' .github/workflows/ci.yml
+
+      - name: Python compile check
+        run: python -m py_compile scripts/_generate_config.py
+
+      - name: Docker Compose render
+        run: docker compose -f docker-compose.yml config > /tmp/compose.rendered.yaml
+
+      - name: Secret scan
+        run: ./scripts/secret-scan.sh

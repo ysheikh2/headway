@@ -1,0 +1,8 @@
+# Default owners
+* @ysheikh2
+
+# Infrastructure and gateway runtime
+/docker-compose.yml @ysheikh2
+/litellm_config.yaml @ysheikh2
+/scripts/ @ysheikh2
+/.github/ @ysheikh2

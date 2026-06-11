@@ -109,6 +109,8 @@ Repository trust docs:
 - [SECURITY.md](SECURITY.md)
 - [CONTRIBUTING.md](CONTRIBUTING.md)
 
+CI checks run on pull requests and `main` pushes, covering shell syntax/formatting, Python formatting/lint/type checks, YAML validation, compose rendering, and secret scanning.
+
 ## Kilo Config
 
 File:
