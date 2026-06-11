@@ -12,12 +12,12 @@ RAW_STATS=$(curl -sS --max-time 8 "$GATEWAY/stats" 2>/dev/null || true)
 RAW_HISTORY=$(curl -sS --max-time 8 "$GATEWAY/stats-history" 2>/dev/null || true)
 
 if [[ -z "$RAW_STATS" ]]; then
-    echo "ERROR: Could not fetch stats from $GATEWAY/stats"
-    echo "Check gateway health with: ./scripts/status.sh"
-    exit 1
+  echo "ERROR: Could not fetch stats from $GATEWAY/stats"
+  echo "Check gateway health with: ./scripts/status.sh"
+  exit 1
 fi
 
-python3 - <<'PY' "$RAW_STATS" "$RAW_HISTORY"
+python3 - "$RAW_STATS" "$RAW_HISTORY" <<'PY'
 import json
 import sys
 

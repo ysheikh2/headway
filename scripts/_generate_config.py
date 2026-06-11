@@ -29,6 +29,7 @@ copilot_token_file = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else ""
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def slugify(value: str) -> str:
     return re.sub(r"-+", "-", re.sub(r"[^a-z0-9]+", "-", value.lower())).strip("-")
 
@@ -75,7 +76,9 @@ def lifecycle_rank(status: str) -> int:
 def pick_better(existing, candidate):
     if existing is None:
         return candidate
-    return candidate if region_rank(candidate[2]) < region_rank(existing[2]) else existing
+    return (
+        candidate if region_rank(candidate[2]) < region_rank(existing[2]) else existing
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +111,9 @@ for name in sorted(os.listdir(tmp_dir)):
             foundation_status_by_model[model_id] = status
 
         inf_types = {str(x).upper() for x in model.get("inferenceTypesSupported", [])}
-        foundation_on_demand[model_id] = foundation_on_demand.get(model_id, False) or ("ON_DEMAND" in inf_types)
+        foundation_on_demand[model_id] = foundation_on_demand.get(model_id, False) or (
+            "ON_DEMAND" in inf_types
+        )
 
         prior_region = foundation_best_region.get(model_id)
         if prior_region is None or region_rank(region) < region_rank(prior_region):
@@ -140,12 +145,18 @@ for name in sorted(os.listdir(tmp_dir)):
         profile_id = summary.get("inferenceProfileId")
         if not profile_id:
             continue
-        if not (profile_id.startswith("eu.") or profile_id.startswith("global.") or region.startswith("eu-")):
+        if not (
+            profile_id.startswith("eu.")
+            or profile_id.startswith("global.")
+            or region.startswith("eu-")
+        ):
             continue
 
         referenced_ids = []
         for model_ref in summary.get("models", []):
-            model_arn = model_ref.get("modelArn") if isinstance(model_ref, dict) else None
+            model_arn = (
+                model_ref.get("modelArn") if isinstance(model_ref, dict) else None
+            )
             mid = extract_model_id_from_arn(model_arn or "")
             if mid:
                 referenced_ids.append(mid)
@@ -184,6 +195,7 @@ entries = sorted(selected.values(), key=lambda x: x[0])
 # Copilot: fetch live models the user has access to and has enabled
 # ---------------------------------------------------------------------------
 
+
 def fetch_copilot_models(token_file: str) -> list[str]:
     """Return chat model IDs that are enabled and visible in the model picker."""
     if not token_file or not os.path.exists(token_file):
@@ -194,7 +206,9 @@ def fetch_copilot_models(token_file: str) -> list[str]:
         token_file = os.path.join(fallback_dir, "api-key.json")
 
     if not os.path.exists(token_file):
-        print(f"[generator] WARNING: Copilot token not found at {token_file}; skipping named Copilot entries")
+        print(
+            f"[generator] WARNING: Copilot token not found at {token_file}; skipping named Copilot entries"
+        )
         return []
 
     try:
@@ -208,7 +222,9 @@ def fetch_copilot_models(token_file: str) -> list[str]:
                         token = value.strip()
                         break
         if not token:
-            print(f"[generator] WARNING: no usable token in {token_file}; skipping named Copilot entries")
+            print(
+                f"[generator] WARNING: no usable token in {token_file}; skipping named Copilot entries"
+            )
             return []
         req = urllib.request.Request(
             "https://api.githubcopilot.com/models",
@@ -235,13 +251,19 @@ def fetch_copilot_models(token_file: str) -> list[str]:
         print(f"[generator] Copilot chat models (enabled, picker): {len(models)}")
         return models
     except urllib.error.HTTPError as exc:
-        print(f"[generator] WARNING: Copilot model API HTTP error ({exc.code}); skipping named entries")
+        print(
+            f"[generator] WARNING: Copilot model API HTTP error ({exc.code}); skipping named entries"
+        )
         return []
     except urllib.error.URLError as exc:
-        print(f"[generator] WARNING: Copilot model API network error ({exc.reason}); skipping named entries")
+        print(
+            f"[generator] WARNING: Copilot model API network error ({exc.reason}); skipping named entries"
+        )
         return []
     except (OSError, json.JSONDecodeError, ValueError) as exc:
-        print(f"[generator] WARNING: could not fetch Copilot models ({exc}); skipping named entries")
+        print(
+            f"[generator] WARNING: could not fetch Copilot models ({exc}); skipping named entries"
+        )
         return []
 
 
@@ -285,18 +307,10 @@ for model_id in copilot_models:
     )
 
 lines.append(
-    "\n"
-    "  - model_name: \"*\"\n"
-    "    litellm_params:\n"
-    "      model: \"github_copilot/*\"\n"
+    '\n  - model_name: "*"\n    litellm_params:\n      model: "github_copilot/*"\n'
 )
 
-lines.append(
-    "\n"
-    "litellm_settings:\n"
-    "  drop_params: true\n"
-    "  set_verbose: false\n"
-)
+lines.append("\nlitellm_settings:\n  drop_params: true\n  set_verbose: false\n")
 
 with open(output_file, "w", encoding="utf-8") as f:
     f.write("".join(lines))

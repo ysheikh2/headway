@@ -1,30 +1,64 @@
 name: CI
 
-on:
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+"on":
   pull_request:
   push:
     branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  lint-and-validate:
-    name: Lint, Type, Validate
+  detect-changes:
+    name: Detect changed areas
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    outputs:
+      shell: ${{ steps.filter.outputs.shell }}
+      python: ${{ steps.filter.outputs.python }}
+      yaml: ${{ steps.filter.outputs.yaml }}
+      relevant: ${{ steps.filter.outputs.relevant }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6.0.3
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Filter changed files
+        id: filter
+        uses: dorny/paths-filter@v4.0.1
         with:
-          python-version: "3.12"
+          filters: |
+            shell:
+              - '**/*.sh'
+            python:
+              - '**/*.py'
+            yaml:
+              - '**/*.yml'
+              - '**/*.yaml'
+            relevant:
+              - '**'
+              - '!**/*.md'
+              - '!LICENSE'
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+  shell-checks:
+    name: Shell checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: detect-changes
+    if: needs.detect-changes.outputs.shell == 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.3
+
+      - name: Shell formatting (shfmt)
+        uses: mfinelli/setup-shfmt@v4.0.1
 
       - name: Shell script syntax (all tracked .sh)
         run: |
@@ -34,9 +68,6 @@ jobs:
             bash -n "${files[@]}"
           fi
 
-      - name: Shell formatting (shfmt)
-        uses: mfinelli/setup-shfmt@v3
-
       - name: Check shell formatting (all tracked .sh)
         run: |
           set -euo pipefail
@@ -45,7 +76,29 @@ jobs:
             shfmt -d -i 2 -ci "${files[@]}"
           fi
 
-      - name: Python formatting and lint (all tracked .py)
+  python-checks:
+    name: Python checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: detect-changes
+    if: needs.detect-changes.outputs.python == 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.3
+
+      - name: Set up Python
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: .github/workflows/ci.yml
+
+      - name: Check Python formatting and lint (all tracked .py)
         run: |
           set -euo pipefail
           mapfile -t files < <(git ls-files '*.py')
@@ -59,8 +112,38 @@ jobs:
           set -euo pipefail
           mapfile -t files < <(git ls-files '*.py')
           if [ "${#files[@]}" -gt 0 ]; then
-            uvx mypy --strict "${files[@]}"
+            uvx ty check "${files[@]}"
           fi
+
+      - name: Python compile check
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git ls-files '*.py')
+          if [ "${#files[@]}" -gt 0 ]; then
+            python -m py_compile "${files[@]}"
+          fi
+
+  yaml-actions-checks:
+    name: YAML and actions checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: detect-changes
+    if: needs.detect-changes.outputs.yaml == 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.3
+
+      - name: Set up Python
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: .github/workflows/ci.yml
 
       - name: YAML validation (all tracked .yml/.yaml)
         run: |
@@ -71,18 +154,132 @@ jobs:
           fi
 
       - name: GitHub Actions workflow lint
-        uses: rhysd/actionlint@v1
+        uses: docker://rhysd/actionlint:1.7.12
 
-      - name: Python compile check
-        run: |
-          set -euo pipefail
-          mapfile -t files < <(git ls-files '*.py')
-          if [ "${#files[@]}" -gt 0 ]; then
-            python -m py_compile "${files[@]}"
-          fi
+  compose-security-checks:
+    name: Compose and security checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: detect-changes
+    if: needs.detect-changes.outputs.relevant == 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.3
 
       - name: Docker Compose render
         run: docker compose -f docker-compose.yml config > /tmp/compose.rendered.yaml
 
       - name: Secret scan
         run: ./scripts/secret-scan.sh
+
+  autofix:
+    name: Auto-fix formatting
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [detect-changes, shell-checks, python-checks]
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (needs.shell-checks.result == 'failure' || needs.python-checks.result == 'failure')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v6.0.3
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: .github/workflows/ci.yml
+
+      - name: Shell formatting (shfmt)
+        if: needs.detect-changes.outputs.shell == 'true' && needs.shell-checks.result == 'failure'
+        uses: mfinelli/setup-shfmt@v4.0.1
+
+      - name: Apply auto-formatters only where checks failed
+        run: |
+          set -euo pipefail
+
+          if [ "${{ needs.detect-changes.outputs.shell }}" == "true" ] && [ "${{ needs.shell-checks.result }}" == "failure" ]; then
+            mapfile -t sh_files < <(git ls-files '*.sh')
+            if [ "${#sh_files[@]}" -gt 0 ]; then
+              shfmt -w -i 2 -ci "${sh_files[@]}"
+            fi
+          fi
+
+          if [ "${{ needs.detect-changes.outputs.python }}" == "true" ] && [ "${{ needs.python-checks.result }}" == "failure" ]; then
+            mapfile -t py_files < <(git ls-files '*.py')
+            if [ "${#py_files[@]}" -gt 0 ]; then
+              uvx ruff format "${py_files[@]}"
+            fi
+          fi
+
+      - name: Detect autofix changes
+        id: changed
+        run: |
+          if git diff --quiet; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit formatting changes
+        if: steps.changed.outputs.has_changes == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v7.1.0
+        with:
+          commit_message: "chore(ci): auto-format via GitHub Actions"
+          commit_user_name: github-actions[bot]
+          commit_user_email: 41898282+github-actions[bot]@users.noreply.github.com
+
+      - name: Fail if no auto-fixable changes were found
+        if: steps.changed.outputs.has_changes != 'true'
+        run: |
+          echo "Checks failed but no format-only changes were produced by autofix."
+          exit 1
+
+  lint-and-validate:
+    name: Lint, Type, Validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs:
+      - detect-changes
+      - shell-checks
+      - python-checks
+      - yaml-actions-checks
+      - compose-security-checks
+      - autofix
+    if: always()
+
+    steps:
+      - name: Verify required jobs passed
+        run: |
+          set -euo pipefail
+
+          if [ "${{ needs.detect-changes.outputs.shell }}" == "true" ]; then
+            if [ "${{ needs.shell-checks.result }}" != "success" ] && [ "${{ needs.autofix.result }}" != "success" ]; then
+              echo "Shell checks failed and autofix did not succeed."
+              exit 1
+            fi
+          fi
+
+          if [ "${{ needs.detect-changes.outputs.python }}" == "true" ]; then
+            if [ "${{ needs.python-checks.result }}" != "success" ] && [ "${{ needs.autofix.result }}" != "success" ]; then
+              echo "Python checks failed and autofix did not succeed."
+              exit 1
+            fi
+          fi
+
+          if [ "${{ needs.detect-changes.outputs.yaml }}" == "true" ]; then
+            [[ "${{ needs.yaml-actions-checks.result }}" == "success" ]]
+          fi
+
+          if [ "${{ needs.detect-changes.outputs.relevant }}" == "true" ]; then
+            [[ "${{ needs.compose-security-checks.result }}" == "success" ]]
+          fi

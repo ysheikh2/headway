@@ -24,7 +24,8 @@ fi
 
 echo
 echo "[2/2] Entropy-ish scan"
-ENTROPY_HITS=$(python3 - <<'PY'
+ENTROPY_HITS=$(
+  python3 - <<'PY'
 import os,re
 root='.'
 skip_dirs={'.data','.git'}
@@ -44,6 +45,8 @@ for dp, dns, fns in os.walk(root):
         for i,line in enumerate(txt.splitlines(),1):
             for m in pat.findall(line):
                 if m.lower().startswith(('http','bedrock-','github_copilot','eu-','global-')):
+                    continue
+                if re.fullmatch(r'[A-Z0-9_]{32,}', m):
                     continue
                 uniq=len(set(m))/len(m)
                 if uniq>0.45 and any(c.isdigit() for c in m) and any(c.isalpha() for c in m):

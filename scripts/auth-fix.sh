@@ -27,23 +27,23 @@ echo
 
 # --- Check Docker ---
 if ! docker info &>/dev/null; then
-    echo "ERROR: Docker is not running. Start Docker Desktop first."
-    exit 1
+  echo "ERROR: Docker is not running. Start Docker Desktop first."
+  exit 1
 fi
 
 # ── AWS SSO ────────────────────────────────────────────────────────────────────
 echo "[ AWS SSO — profile: $AWS_PROFILE_NAME ]"
 if ! AWS_REGION="$AWS_REGION_NAME" AWS_DEFAULT_REGION="$AWS_REGION_NAME" aws sts get-caller-identity --profile "$AWS_PROFILE_NAME" &>/dev/null; then
-    echo "  SSO session expired. Logging in..."
-    aws sso login --profile "$AWS_PROFILE_NAME"
-    echo "  SSO login complete."
+  echo "  SSO session expired. Logging in..."
+  aws sso login --profile "$AWS_PROFILE_NAME"
+  echo "  SSO login complete."
 else
-    echo "  AWS session valid."
+  echo "  AWS session valid."
 fi
 echo
 
 # ── Write .env ─────────────────────────────────────────────────────────────────
-cat > "$ENV_FILE" <<EOF
+cat >"$ENV_FILE" <<EOF
 AWS_PROFILE=$AWS_PROFILE_NAME
 EOF
 echo "[ Updated .env: $ENV_FILE ]"
@@ -52,12 +52,12 @@ echo
 # ── Generate LiteLLM config from Bedrock model discovery ─────────────────────
 echo "[ Generating litellm_config.yaml from AWS Bedrock ]"
 if ! bash "$GENERATOR" --aws-profile "$AWS_PROFILE_NAME" --output "$DIR/litellm_config.yaml"; then
-    echo "  WARNING: generation failed"
-    if [[ ! -s "$DIR/litellm_config.yaml" ]]; then
-        echo "  ERROR: missing or empty litellm_config.yaml and generation failed"
-        exit 1
-    fi
-    echo "  Continuing with existing litellm_config.yaml"
+  echo "  WARNING: generation failed"
+  if [[ ! -s "$DIR/litellm_config.yaml" ]]; then
+    echo "  ERROR: missing or empty litellm_config.yaml and generation failed"
+    exit 1
+  fi
+  echo "  Continuing with existing litellm_config.yaml"
 fi
 echo
 
@@ -74,27 +74,27 @@ echo
 echo "[ Waiting for gateway to become healthy... ]"
 LIVE=""
 for i in $(seq 1 30); do
-    LIVE=$(curl -sf --max-time 3 "$GATEWAY/livez" 2>/dev/null || true)
-    if [[ -n "$LIVE" ]]; then
-        echo "  Gateway healthy."
-        break
-    fi
-    printf "  Waiting %d/30...\r" "$i"
-    sleep 2
+  LIVE=$(curl -sf --max-time 3 "$GATEWAY/livez" 2>/dev/null || true)
+  if [[ -n "$LIVE" ]]; then
+    echo "  Gateway healthy."
+    break
+  fi
+  printf "  Waiting %d/30...\r" "$i"
+  sleep 2
 done
 
 if [[ -z "$LIVE" ]]; then
-    echo "ERROR: Gateway did not become healthy. Check logs:"
-    echo "  docker logs headroom-gateway"
-    echo "  docker logs litellm-gateway"
-    CODE_LINE=$(docker logs litellm-gateway 2>/dev/null | grep -E 'Please visit https://github.com/login/device and enter code' | tail -1 || true)
-    if [[ -n "$CODE_LINE" ]]; then
-        echo
-        echo "Copilot device auth pending:"
-        echo "  $CODE_LINE"
-        echo "  Open: https://github.com/login/device"
-    fi
-    exit 1
+  echo "ERROR: Gateway did not become healthy. Check logs:"
+  echo "  docker logs headroom-gateway"
+  echo "  docker logs litellm-gateway"
+  CODE_LINE=$(docker logs litellm-gateway 2>/dev/null | grep -E 'Please visit https://github.com/login/device and enter code' | tail -1 || true)
+  if [[ -n "$CODE_LINE" ]]; then
+    echo
+    echo "Copilot device auth pending:"
+    echo "  $CODE_LINE"
+    echo "  Open: https://github.com/login/device"
+  fi
+  exit 1
 fi
 echo
 
@@ -103,35 +103,35 @@ echo "[ Smoke test: GitHub Copilot via gateway ]"
 COPILOT_SMOKE_MODEL=""
 RESPONSE=""
 for CANDIDATE in "claude-haiku-4.5" "gemini-3-flash" "gpt-5-mini" "claude-sonnet-4.6"; do
-    COPILOT_SMOKE_MODEL="$CANDIDATE"
-    RESPONSE=$(curl -s --max-time 30 \
-        "$GATEWAY/v1/chat/completions" \
-        -H "Content-Type: application/json" \
-        -d "{\"model\":\"$COPILOT_SMOKE_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with the single word: AUTHOK\"}],\"max_tokens\":10,\"stream\":false}" \
-        2>/dev/null || true)
+  COPILOT_SMOKE_MODEL="$CANDIDATE"
+  RESPONSE=$(curl -s --max-time 30 \
+    "$GATEWAY/v1/chat/completions" \
+    -H "Content-Type: application/json" \
+    -d "{\"model\":\"$COPILOT_SMOKE_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with the single word: AUTHOK\"}],\"max_tokens\":10,\"stream\":false}" \
+    2>/dev/null || true)
 
-    if echo "$RESPONSE" | grep -qi "AUTHOK"; then
-        break
-    fi
+  if echo "$RESPONSE" | grep -qi "AUTHOK"; then
+    break
+  fi
 
-    if echo "$RESPONSE" | tr '[:upper:]' '[:lower:]' | grep -Eq "model|not found|unsupported|does not exist"; then
-        continue
-    fi
+  if echo "$RESPONSE" | tr '[:upper:]' '[:lower:]' | grep -Eq "model|not found|unsupported|does not exist"; then
+    continue
+  fi
 done
 
 if echo "$RESPONSE" | grep -qi "AUTHOK"; then
-    echo "  Copilot smoke test: PASSED ($COPILOT_SMOKE_MODEL)"
+  echo "  Copilot smoke test: PASSED ($COPILOT_SMOKE_MODEL)"
 elif [[ -n "$RESPONSE" ]]; then
-    echo "  Copilot smoke test: got response (model $COPILOT_SMOKE_MODEL): $(echo "$RESPONSE" | head -c 200)"
-    echo "  If this indicates GitHub Copilot auth is missing, check litellm logs for device code login prompt."
+  echo "  Copilot smoke test: got response (model $COPILOT_SMOKE_MODEL): $(echo "$RESPONSE" | head -c 200)"
+  echo "  If this indicates GitHub Copilot auth is missing, check litellm logs for device code login prompt."
 else
-    echo "  Copilot smoke test: FAILED — no response"
-    echo "  Check logs: docker logs litellm-gateway"
-    echo "  If prompted, complete GitHub device flow shown in logs."
-    CODE_LINE=$(docker logs litellm-gateway 2>/dev/null | grep -E 'Please visit https://github.com/login/device and enter code' | tail -1 || true)
-    if [[ -n "$CODE_LINE" ]]; then
-        echo "  Latest device code: $CODE_LINE"
-    fi
+  echo "  Copilot smoke test: FAILED — no response"
+  echo "  Check logs: docker logs litellm-gateway"
+  echo "  If prompted, complete GitHub device flow shown in logs."
+  CODE_LINE=$(docker logs litellm-gateway 2>/dev/null | grep -E 'Please visit https://github.com/login/device and enter code' | tail -1 || true)
+  if [[ -n "$CODE_LINE" ]]; then
+    echo "  Latest device code: $CODE_LINE"
+  fi
 fi
 echo
 
