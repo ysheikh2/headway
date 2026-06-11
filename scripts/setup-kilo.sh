@@ -13,8 +13,8 @@ BACKUP_SUFFIX="$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$KILO_DIR"
 
 if [[ -f "$KILO_CONF" ]]; then
-    cp "$KILO_CONF" "$KILO_CONF.bak-$BACKUP_SUFFIX"
-    echo "[backup] $KILO_CONF.bak-$BACKUP_SUFFIX"
+  cp "$KILO_CONF" "$KILO_CONF.bak-$BACKUP_SUFFIX"
+  echo "[backup] $KILO_CONF.bak-$BACKUP_SUFFIX"
 fi
 
 python3 - <<'PY'

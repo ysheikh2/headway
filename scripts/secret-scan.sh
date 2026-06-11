@@ -24,7 +24,8 @@ fi
 
 echo
 echo "[2/2] Entropy-ish scan"
-ENTROPY_HITS=$(python3 - <<'PY'
+ENTROPY_HITS=$(
+  python3 - <<'PY'
 import os,re
 root='.'
 skip_dirs={'.data','.git'}

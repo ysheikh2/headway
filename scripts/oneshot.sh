@@ -10,10 +10,16 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AWS_PROFILE_NAME="d2i_stg"
 
 while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --aws-profile) AWS_PROFILE_NAME="$2"; shift 2 ;;
-        *) echo "Unknown arg: $1"; exit 1 ;;
-    esac
+  case "$1" in
+    --aws-profile)
+      AWS_PROFILE_NAME="$2"
+      shift 2
+      ;;
+    *)
+      echo "Unknown arg: $1"
+      exit 1
+      ;;
+  esac
 done
 
 echo "=== One-Shot Bootstrap (Kilo + Gateway) ==="

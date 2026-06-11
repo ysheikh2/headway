@@ -21,11 +21,26 @@ CLEANUP_KILO=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --yes) CONFIRM=false; shift ;;
-    --purge-data) PURGE_DATA=true; shift ;;
-    --prune-images) PRUNE_IMAGES=true; shift ;;
-    --cleanup-kilo) CLEANUP_KILO=true; shift ;;
-    *) echo "Unknown arg: $1"; exit 1 ;;
+    --yes)
+      CONFIRM=false
+      shift
+      ;;
+    --purge-data)
+      PURGE_DATA=true
+      shift
+      ;;
+    --prune-images)
+      PRUNE_IMAGES=true
+      shift
+      ;;
+    --cleanup-kilo)
+      CLEANUP_KILO=true
+      shift
+      ;;
+    *)
+      echo "Unknown arg: $1"
+      exit 1
+      ;;
   esac
 done
 

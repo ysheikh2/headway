@@ -9,16 +9,16 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE="$DIR/docker-compose.yml"
 
 if ! docker info &>/dev/null; then
-    echo "ERROR: Docker is not running."
-    exit 1
+  echo "ERROR: Docker is not running."
+  exit 1
 fi
 
 # Check whether any stack containers actually exist before trying to stop.
 running=$(docker compose -f "$COMPOSE" ps --quiet 2>/dev/null | wc -l | tr -d ' ')
 
 if [[ "$running" -eq 0 ]]; then
-    echo "Stack is not running — nothing to stop."
-    exit 0
+  echo "Stack is not running — nothing to stop."
+  exit 0
 fi
 
 echo "=== Stopping LiteLLM+Headroom Gateway ==="

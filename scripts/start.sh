@@ -16,10 +16,16 @@ GENERATOR="$DIR/scripts/generate-litellm-config.sh"
 AWS_REGION_NAME="eu-central-1"
 
 while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --aws-profile)      AWS_PROFILE_NAME="$2"; shift 2 ;;
-        *) echo "Unknown arg: $1"; exit 1 ;;
-    esac
+  case "$1" in
+    --aws-profile)
+      AWS_PROFILE_NAME="$2"
+      shift 2
+      ;;
+    *)
+      echo "Unknown arg: $1"
+      exit 1
+      ;;
+  esac
 done
 
 echo "=== Starting LiteLLM+Headroom Gateway ==="
@@ -27,25 +33,25 @@ echo
 
 # --- Check Docker ---
 if ! docker info &>/dev/null; then
-    echo "ERROR: Docker is not running."
-    echo "Start Docker Desktop from Applications or the menu bar, then re-run."
-    exit 1
+  echo "ERROR: Docker is not running."
+  echo "Start Docker Desktop from Applications or the menu bar, then re-run."
+  exit 1
 fi
 
 # ── AWS Auth (for Bedrock) ─────────────────────────────────────────────────────
 echo "[ AWS Authentication — profile: $AWS_PROFILE_NAME ]"
 if ! AWS_REGION="$AWS_REGION_NAME" AWS_DEFAULT_REGION="$AWS_REGION_NAME" aws sts get-caller-identity --profile "$AWS_PROFILE_NAME" &>/dev/null; then
-    echo "  SSO session expired. Logging in..."
-    aws sso login --profile "$AWS_PROFILE_NAME"
+  echo "  SSO session expired. Logging in..."
+  aws sso login --profile "$AWS_PROFILE_NAME"
 fi
-AWS_IDENTITY=$(AWS_REGION="$AWS_REGION_NAME" AWS_DEFAULT_REGION="$AWS_REGION_NAME" aws sts get-caller-identity --profile "$AWS_PROFILE_NAME" 2>/dev/null \
-    | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Account: {d[\"Account\"]}  ARN: {d[\"Arn\"]}')" \
+AWS_IDENTITY=$(AWS_REGION="$AWS_REGION_NAME" AWS_DEFAULT_REGION="$AWS_REGION_NAME" aws sts get-caller-identity --profile "$AWS_PROFILE_NAME" 2>/dev/null |
+  python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Account: {d[\"Account\"]}  ARN: {d[\"Arn\"]}')" \
     2>/dev/null || echo "(could not retrieve identity)")
 echo "  $AWS_IDENTITY"
 echo
 
 # ── Write .env ─────────────────────────────────────────────────────────────────
-cat > "$ENV_FILE" <<EOF
+cat >"$ENV_FILE" <<EOF
 AWS_PROFILE=$AWS_PROFILE_NAME
 EOF
 echo "[ .env written: $ENV_FILE ]"
@@ -54,12 +60,12 @@ echo
 # ── Generate LiteLLM config from Bedrock model discovery ─────────────────────
 echo "[ Generating litellm_config.yaml from AWS Bedrock ]"
 if ! bash "$GENERATOR" --aws-profile "$AWS_PROFILE_NAME" --output "$DIR/litellm_config.yaml"; then
-    echo "  WARNING: generation failed"
-    if [[ ! -s "$DIR/litellm_config.yaml" ]]; then
-        echo "  ERROR: missing or empty litellm_config.yaml and generation failed"
-        exit 1
-    fi
-    echo "  Continuing with existing litellm_config.yaml"
+  echo "  WARNING: generation failed"
+  if [[ ! -s "$DIR/litellm_config.yaml" ]]; then
+    echo "  ERROR: missing or empty litellm_config.yaml and generation failed"
+    exit 1
+  fi
+  echo "  Continuing with existing litellm_config.yaml"
 fi
 echo
 
@@ -85,27 +91,27 @@ echo
 echo "[ Waiting for gateway to become healthy... ]"
 LIVE=""
 for i in $(seq 1 30); do
-    LIVE=$(curl -sf --max-time 3 "$GATEWAY/livez" 2>/dev/null || true)
-    if [[ -n "$LIVE" ]]; then
-        echo "  Gateway is healthy."
-        break
-    fi
-    printf "  Attempt %d/30...\r" "$i"
-    sleep 2
+  LIVE=$(curl -sf --max-time 3 "$GATEWAY/livez" 2>/dev/null || true)
+  if [[ -n "$LIVE" ]]; then
+    echo "  Gateway is healthy."
+    break
+  fi
+  printf "  Attempt %d/30...\r" "$i"
+  sleep 2
 done
 
 if [[ -z "${LIVE:-}" ]]; then
-    echo "  WARNING: Gateway did not respond within 60s. Check logs:"
-    echo "  docker logs headroom-gateway"
-    echo "  docker logs litellm-gateway"
-    CODE_LINE=$(docker logs litellm-gateway 2>/dev/null | grep -E 'Please visit https://github.com/login/device and enter code' | tail -1 || true)
-    if [[ -n "$CODE_LINE" ]]; then
-        echo
-        echo "  Copilot device auth pending:"
-        echo "  $CODE_LINE"
-        echo "  Open: https://github.com/login/device"
-    fi
-    exit 1
+  echo "  WARNING: Gateway did not respond within 60s. Check logs:"
+  echo "  docker logs headroom-gateway"
+  echo "  docker logs litellm-gateway"
+  CODE_LINE=$(docker logs litellm-gateway 2>/dev/null | grep -E 'Please visit https://github.com/login/device and enter code' | tail -1 || true)
+  if [[ -n "$CODE_LINE" ]]; then
+    echo
+    echo "  Copilot device auth pending:"
+    echo "  $CODE_LINE"
+    echo "  Open: https://github.com/login/device"
+  fi
+  exit 1
 fi
 
 echo
