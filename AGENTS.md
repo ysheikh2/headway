@@ -68,7 +68,7 @@ In this repo we avoid raw IDs in Kilo by using LiteLLM aliases in `litellm_confi
 - Do not rely on old model names (for example `gpt-4o` may not be available).
 - Use currently available Copilot models; tests should prefer low-cost models (for example `claude-haiku-4.5`) with fallback.
 - 403 errors usually mean token refresh is needed.
-- LiteLLM GitHub Copilot provider requires device-flow login on first use. Tokens persist in `/root/.config/litellm/github_copilot` inside the container (mounted as a named volume).
+- LiteLLM GitHub Copilot provider requires device-flow login on first use. Tokens persist under `.data/litellm` on the host (mounted to `/root/.config/litellm` in the container).
 
 ### AWS Bedrock
 
