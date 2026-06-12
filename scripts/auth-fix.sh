@@ -18,7 +18,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE="$DIR/docker-compose.yml"
 ENV_FILE="$DIR/.env"
 GATEWAY="http://127.0.0.1:4000"
-AWS_PROFILE_NAME="${AWS_PROFILE:-d2i_stg}"
+AWS_PROFILE_NAME="${AWS_PROFILE:-default}"
 GENERATOR="$DIR/scripts/generate-litellm-config.sh"
 AWS_REGION_NAME="eu-central-1"
 
@@ -67,6 +67,7 @@ cd "$DIR"
 docker compose -f "$COMPOSE" down 2>/dev/null || true
 docker rm -f litellm-gateway 2>/dev/null || true
 docker rm -f headroom-gateway 2>/dev/null || true
+docker rm -f headroom-bedrock-gateway 2>/dev/null || true
 docker compose -f "$COMPOSE" up -d
 echo
 

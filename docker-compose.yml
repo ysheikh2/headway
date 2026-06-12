@@ -1,11 +1,11 @@
 # LiteLLM + Headroom gateway — Docker Compose
 #
 # Architecture:
-#   Kilo -> Headroom (port 4000) -> LiteLLM (port 4001)
-#                                 |- bedrock-* -> AWS Bedrock
-#                                 |- <copilot model> -> github_copilot/<copilot model>
+#   Kilo (Copilot)  -> Headroom :4000 -> LiteLLM :4001 -> GitHub Copilot
+#   Kilo (Bedrock)  -> Headroom :4002 (native Bedrock routes) -> AWS Bedrock
 #
-# This keeps one endpoint for Kilo while preserving Headroom compression/memory.
+# Copilot lane uses ghcr.io/chopratejas/headroom:code.
+# Bedrock lane uses HEADROOM_BEDROCK_IMAGE (default GHCR tag shown below).
 # Runtime state is persisted in-repo under .data/ (gitignored).
 
 services:
@@ -16,7 +16,7 @@ services:
     ports:
       - "127.0.0.1:4001:4000"
     environment:
-      - AWS_PROFILE=${AWS_PROFILE:-d2i_stg}
+      - AWS_PROFILE=${AWS_PROFILE:-default}
       - AWS_CONFIG_FILE=/root/.aws/config
       - AWS_SHARED_CREDENTIALS_FILE=/root/.aws/credentials
       - GITHUB_COPILOT_TOKEN_DIR=/root/.config/litellm/github_copilot
@@ -67,3 +67,34 @@ services:
       start_period: 30s
     volumes:
       - ./.data/headroom:/root/.headroom
+
+  headroom-bedrock:
+    image: ${HEADROOM_BEDROCK_IMAGE:-ghcr.io/ysheikh2/headroom-proxy:bedrock-native}
+    container_name: headroom-bedrock-gateway
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:4002:8787"
+    environment:
+      - AWS_PROFILE=${BEDROCK_AWS_PROFILE:-default}
+      - AWS_REGION=${AWS_REGION:-eu-central-1}
+      - AWS_DEFAULT_REGION=${AWS_REGION:-eu-central-1}
+      - HEADROOM_PROXY_AWS_PROFILE=${BEDROCK_AWS_PROFILE:-default}
+      - HEADROOM_PROXY_BEDROCK_REGION=${AWS_REGION:-eu-central-1}
+    command:
+      - "--listen"
+      - "0.0.0.0:8787"
+      - "--upstream"
+      - "https://bedrock-runtime.${AWS_REGION:-eu-central-1}.amazonaws.com"
+      - "--aws-profile"
+      - "${BEDROCK_AWS_PROFILE:-default}"
+      - "--bedrock-region"
+      - "${AWS_REGION:-eu-central-1}"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8787/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    volumes:
+      - ./.data/headroom-bedrock:/root/.headroom
+      - ${HOME}/.aws:/root/.aws

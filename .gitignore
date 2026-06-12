@@ -1,4 +1,11 @@
 .env
+.env.local
+.env.*
+!.env.template
 .headroom-data/
 .litellm-copilot/
 .data/
+.kilo/
+.playwright-mcp/
+__pycache__/
+*.pyc

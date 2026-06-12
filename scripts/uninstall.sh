@@ -68,6 +68,7 @@ docker compose -f "$COMPOSE" down --remove-orphans 2>/dev/null || true
 echo "[2/5] Removing containers"
 docker rm -f headroom-gateway 2>/dev/null || true
 docker rm -f litellm-gateway 2>/dev/null || true
+docker rm -f headroom-bedrock-gateway 2>/dev/null || true
 
 echo "[3/5] Removing transient local files"
 rm -f "$DIR/.env"
@@ -83,6 +84,8 @@ if [[ "$PRUNE_IMAGES" == true ]]; then
   echo "[5/5] Removing local Docker images"
   docker image rm ghcr.io/chopratejas/headroom:code 2>/dev/null || true
   docker image rm ghcr.io/berriai/litellm:main-stable 2>/dev/null || true
+  # Also attempt to remove a commonly used Bedrock-native image tag if present
+  docker image rm ghcr.io/ysheikh2/headroom-proxy:bedrock-native 2>/dev/null || true
 else
   echo "[5/5] Keeping local Docker images"
 fi
@@ -114,6 +117,13 @@ for key in ("github-copilot", "openai-compatible"):
         if isinstance(opts, dict):
             if opts.get("baseURL") == "http://127.0.0.1:4000/v1":
                 opts.pop("baseURL", None)
+
+bedrock = providers.get("amazon-bedrock")
+if isinstance(bedrock, dict):
+    opts = bedrock.get("options")
+    if isinstance(opts, dict):
+        if opts.get("baseURL") in ("http://127.0.0.1:4002", "http://127.0.0.1:4002/v1"):
+            opts.pop("baseURL", None)
 
 p.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 print(f"updated {p}")

@@ -7,7 +7,7 @@
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-AWS_PROFILE_NAME="d2i_stg"
+AWS_PROFILE_NAME="${AWS_PROFILE:-default}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -38,4 +38,6 @@ bash "$DIR/scripts/status.sh"
 echo
 
 echo "=== Complete ==="
-echo "Configured providers now point to: http://127.0.0.1:4000/v1"
+echo "Configured providers:"
+echo "  github-copilot / openai-compatible -> http://127.0.0.1:4000/v1"
+echo "  amazon-bedrock                     -> http://127.0.0.1:4002"

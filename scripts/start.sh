@@ -3,7 +3,7 @@
 # Run this after a Mac reboot or any time the gateway is not running.
 #
 # Usage: ./scripts/start.sh [--aws-profile <profile>]
-#   --aws-profile <name>   AWS SSO profile for Bedrock (default: d2i_stg)
+#   --aws-profile <name>   AWS SSO profile for LiteLLM discovery/runtime (default: AWS_PROFILE or "default")
 
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -11,7 +11,7 @@ COMPOSE="$DIR/docker-compose.yml"
 ENV_FILE="$DIR/.env"
 GATEWAY="http://127.0.0.1:4000"
 LITELLM_ADMIN="http://127.0.0.1:4001"
-AWS_PROFILE_NAME="d2i_stg"
+AWS_PROFILE_NAME="${AWS_PROFILE:-default}"
 GENERATOR="$DIR/scripts/generate-litellm-config.sh"
 AWS_REGION_NAME="eu-central-1"
 
@@ -72,7 +72,17 @@ echo
 # ── Pull images ───────────────────────────────────────────────────────────────
 echo "[ Pulling latest images ]"
 cd "$DIR"
-docker compose -f "$COMPOSE" pull
+docker compose -f "$COMPOSE" pull litellm headroom
+
+# Bedrock lane may use a local image tag. Pull only when
+# the configured image is remote.
+BEDROCK_IMAGE=$(docker compose -f "$COMPOSE" config --format json 2>/dev/null |
+  python3 -c "import json,sys; print(json.load(sys.stdin)['services'].get('headroom-bedrock',{}).get('image',''))" 2>/dev/null || echo "")
+if [[ -n "$BEDROCK_IMAGE" && "$BEDROCK_IMAGE" == *"/"* ]]; then
+  docker compose -f "$COMPOSE" pull headroom-bedrock
+else
+  echo "  Skipping pull for headroom-bedrock image: ${BEDROCK_IMAGE:-<unset>}"
+fi
 echo
 
 # ── Stop old containers ────────────────────────────────────────────────────────
@@ -80,6 +90,7 @@ echo "[ Stopping existing containers ]"
 docker compose -f "$COMPOSE" down 2>/dev/null || true
 docker rm -f headroom-gateway 2>/dev/null || true
 docker rm -f litellm-gateway 2>/dev/null || true
+docker rm -f headroom-bedrock-gateway 2>/dev/null || true
 echo
 
 # ── Start ──────────────────────────────────────────────────────────────────────

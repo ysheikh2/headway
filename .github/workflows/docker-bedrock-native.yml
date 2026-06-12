@@ -1,0 +1,97 @@
+name: Docker Bedrock Native
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  HEADROOM_SOURCE_REPO: ysheikh2/headroom
+  HEADROOM_SOURCE_REF: 053a5b94ded45309c144577c92982562d4f97843
+
+"on":
+  workflow_dispatch:
+    inputs:
+      headroom_source_repo:
+        description: "Headroom source repo (owner/name)"
+        required: false
+        default: "ysheikh2/headroom"
+      headroom_source_ref:
+        description: "Headroom source ref (commit/tag/branch)"
+        required: false
+        default: "053a5b94ded45309c144577c92982562d4f97843"
+  push:
+    branches: [main]
+    paths:
+      - "Dockerfile.bedrock-native"
+      - ".github/workflows/docker-bedrock-native.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-bedrock-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.3
+
+      - name: Normalize image name
+        id: image-name
+        run: |
+          image_name="$(printf '%s' '${{ env.IMAGE_NAME }}' | tr '[:upper:]' '[:lower:]')"
+          printf 'image_name=%s\n' "$image_name" >> "$GITHUB_OUTPUT"
+
+      - name: Compute short SHA
+        id: short-sha
+        run: printf 'sha=%s\n' "${GITHUB_SHA:0:8}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve source repo/ref
+        id: source
+        run: |
+          repo="${{ github.event.inputs.headroom_source_repo || env.HEADROOM_SOURCE_REPO }}"
+          ref="${{ github.event.inputs.headroom_source_ref || env.HEADROOM_SOURCE_REF }}"
+          printf 'repo=%s\n' "$repo" >> "$GITHUB_OUTPUT"
+          printf 'ref=%s\n' "$ref" >> "$GITHUB_OUTPUT"
+          echo "Building from $repo @ $ref"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image_name }}
+          tags: |
+            type=raw,value=bedrock-native-${{ steps.short-sha.outputs.sha }}
+            type=raw,value=bedrock-native
+            type=ref,event=branch,prefix=bedrock-native-
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.bedrock-native
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            HEADROOM_GIT_REPO=${{ steps.source.outputs.repo }}
+            HEADROOM_GIT_REF=${{ steps.source.outputs.ref }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
