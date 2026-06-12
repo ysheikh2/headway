@@ -512,7 +512,7 @@ if [[ $FAIL -gt 0 ]]; then
   echo "  Some tests failed. Quick fixes:"
   echo "    Not running:  ./scripts/start.sh"
   echo "    Auth (403):   ./scripts/auth-fix.sh"
-    echo "    AWS expired:  aws sso login --profile ${BEDROCK_AWS_PROFILE:-default}"
+  echo "    AWS expired:  aws sso login --profile ${BEDROCK_AWS_PROFILE:-default}"
   exit 1
 fi
 

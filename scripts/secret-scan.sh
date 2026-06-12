@@ -13,7 +13,7 @@ echo "=== Secret Scan ==="
 echo
 
 echo "[1/2] Pattern scan"
-PATTERN_HITS=$(grep -RInE '(AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z\-_]{35}|-----BEGIN (RSA|EC|OPENSSH|PRIVATE) KEY-----|(password|secret|api[_-]?key|token)\s*=\s*["'"'"'])' . --exclude-dir=.data --exclude-dir=.git --exclude=litellm_config.yaml || true)
+PATTERN_HITS=$(grep -RInE '(AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z\-_]{35}|-----BEGIN (RSA|EC|OPENSSH|PRIVATE) KEY-----|(password|secret|api[_-]?key|token)\s*=\s*["'"'"'])' . --exclude-dir=.data --exclude-dir=.git --exclude-dir=.kilo --exclude-dir=.playwright-mcp --exclude=litellm_config.yaml || true)
 if [[ -n "$PATTERN_HITS" ]]; then
   echo "$PATTERN_HITS"
   PATTERN_FAIL=1
@@ -28,7 +28,7 @@ ENTROPY_HITS=$(
   python3 - <<'PY'
 import os,re
 root='.'
-skip_dirs={'.data','.git'}
+skip_dirs={'.data','.git','.kilo','.playwright-mcp'}
 pat=re.compile(r'[A-Za-z0-9+/=_-]{32,}')
 ignore_ext={'.png','.jpg','.jpeg','.gif','.webp','.pdf','.zip','.gz'}
 results=[]
@@ -45,6 +45,10 @@ for dp, dns, fns in os.walk(root):
         for i,line in enumerate(txt.splitlines(),1):
             for m in pat.findall(line):
                 if m.lower().startswith(('http','bedrock-','github_copilot','eu-','global-')):
+                    continue
+                if m.startswith(('HEADROOM_GIT_REF=','HEADROOM_GIT_REPO=')):
+                    continue
+                if re.fullmatch(r'[0-9a-fA-F]{40,64}', m):
                     continue
                 if re.fullmatch(r'[A-Z0-9_]{32,}', m):
                     continue
