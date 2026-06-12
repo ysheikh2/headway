@@ -33,7 +33,7 @@ Kilo endpoints:
 - Role: upstream provider router (Bedrock + GitHub Copilot)
 
 3. `headroom-bedrock-gateway`
-- Image: `${HEADROOM_BEDROCK_IMAGE}` (default `headroom-local:bedrock-c9e4822e`, built from commit `c9e4822e`)
+- Image: `${HEADROOM_BEDROCK_IMAGE}` (default `headroom-local:bedrock-ea563663`, built from commit `ea563663`)
 - Port: `127.0.0.1:4002` (container `:8787`)
 - Upstream: AWS Bedrock Runtime (native Bedrock routes)
 - Auth: AWS profile chain (`AWS_PROFILE`, mounted `~/.aws`)
@@ -68,8 +68,8 @@ Practical effect:
 **Default:** do not build custom Docker images or modify the headroom source repo.
 
 **Temporary exception for Bedrock native route validation:** use
-`HEADROOM_BEDROCK_IMAGE` (default `headroom-local:bedrock-c9e4822e`) built from
-git commit `c9e4822e` until PR #917 is merged and released upstream.
+`HEADROOM_BEDROCK_IMAGE` (default `headroom-local:bedrock-ea563663`) built from
+git commit `ea563663` until PR #917 is merged and released upstream.
 
 ## Why Bedrock Uses Native Routes on :4002
 
@@ -89,9 +89,8 @@ route compatibility directly in Headroom.
 ### AWS Bedrock
 
 - Uses AWS credential chain, not generic API key auth.
-- Primary mode here: AWS SSO profile `d2i_prod` (used by `:4002` Bedrock lane).
-- `d2i_stg` does not have `bedrock:InvokeModel` permission; use `d2i_prod` for Bedrock.
-- LiteLLM lane (`:4001`) still uses `d2i_stg` for Bedrock model discovery/aliases.
+- Primary mode here: AWS SSO profile from `BEDROCK_AWS_PROFILE` (used by `:4002` Bedrock lane).
+- LiteLLM lane (`:4001`) uses profile from `AWS_PROFILE` for Bedrock model discovery/aliases.
 - If SSO expires, Bedrock requests fail until re-login.
 
 ## Files That Matter
@@ -233,13 +232,13 @@ curl -sS http://127.0.0.1:4000/stats
 ### Check AWS SSO profile
 
 ```bash
-aws sts get-caller-identity --profile d2i_prod
+aws sts get-caller-identity --profile "$BEDROCK_AWS_PROFILE"
 ```
 
 If expired:
 
 ```bash
-aws sso login --profile d2i_prod
+aws sso login --profile "$BEDROCK_AWS_PROFILE"
 ```
 
 ## Known Failure Modes and Fixes
@@ -251,19 +250,19 @@ aws sso login --profile d2i_prod
 2. Bedrock invalid model identifier
 - Cause: wrong/stale model/inference profile ID
 - Fix: regenerate config from AWS and restart:
-  - `./scripts/generate-litellm-config.sh --aws-profile d2i_stg`
+  - `./scripts/generate-litellm-config.sh --aws-profile "$AWS_PROFILE"`
   - `docker compose up -d`
 
 3. Bedrock auth failure (native lane `:4002`)
-- Cause: expired AWS SSO session for `d2i_prod`
+- Cause: expired AWS SSO session for profile in `BEDROCK_AWS_PROFILE`
 - Fix:
-  - `aws sso login --profile d2i_prod`
+  - `aws sso login --profile "$BEDROCK_AWS_PROFILE"`
   - `./scripts/auth-fix.sh`
 
 4. Bedrock auth failure (LiteLLM alias lane `:4001`)
-- Cause: expired AWS SSO session for `d2i_stg`
+- Cause: expired AWS SSO session for profile in `AWS_PROFILE`
 - Fix:
-  - `aws sso login --profile d2i_stg`
+  - `aws sso login --profile "$AWS_PROFILE"`
   - `./scripts/auth-fix.sh`
 
 5. LiteLLM healthy endpoint works but Docker health says unhealthy
@@ -281,14 +280,14 @@ When models change (common for Copilot and Bedrock):
 1. List currently available Bedrock models:
 
 ```bash
-aws bedrock list-foundation-models --profile d2i_stg --region eu-central-1
-aws bedrock list-inference-profiles --profile d2i_stg --region eu-central-1
+aws bedrock list-foundation-models --profile "$AWS_PROFILE" --region eu-central-1
+aws bedrock list-inference-profiles --profile "$AWS_PROFILE" --region eu-central-1
 ```
 
 2. Regenerate `litellm_config.yaml`:
 
 ```bash
-./scripts/generate-litellm-config.sh --aws-profile d2i_stg
+./scripts/generate-litellm-config.sh --aws-profile "$AWS_PROFILE"
 ```
 
 3. Restart stack:

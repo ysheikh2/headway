@@ -16,7 +16,7 @@ services:
     ports:
       - "127.0.0.1:4001:4000"
     environment:
-      - AWS_PROFILE=${AWS_PROFILE:-d2i_stg}
+      - AWS_PROFILE=${AWS_PROFILE:-default}
       - AWS_CONFIG_FILE=/root/.aws/config
       - AWS_SHARED_CREDENTIALS_FILE=/root/.aws/credentials
       - GITHUB_COPILOT_TOKEN_DIR=/root/.config/litellm/github_copilot
@@ -75,10 +75,10 @@ services:
     ports:
       - "127.0.0.1:4002:8787"
     environment:
-      - AWS_PROFILE=${BEDROCK_AWS_PROFILE:-d2i_prod}
+      - AWS_PROFILE=${BEDROCK_AWS_PROFILE:-default}
       - AWS_REGION=${AWS_REGION:-eu-central-1}
       - AWS_DEFAULT_REGION=${AWS_REGION:-eu-central-1}
-      - HEADROOM_PROXY_AWS_PROFILE=${BEDROCK_AWS_PROFILE:-d2i_prod}
+      - HEADROOM_PROXY_AWS_PROFILE=${BEDROCK_AWS_PROFILE:-default}
       - HEADROOM_PROXY_BEDROCK_REGION=${AWS_REGION:-eu-central-1}
     command:
       - "--listen"
@@ -86,7 +86,7 @@ services:
       - "--upstream"
       - "https://bedrock-runtime.${AWS_REGION:-eu-central-1}.amazonaws.com"
       - "--aws-profile"
-      - "${BEDROCK_AWS_PROFILE:-d2i_prod}"
+      - "${BEDROCK_AWS_PROFILE:-default}"
       - "--bedrock-region"
       - "${AWS_REGION:-eu-central-1}"
     healthcheck:

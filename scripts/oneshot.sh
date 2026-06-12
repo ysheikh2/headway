@@ -7,7 +7,7 @@
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-AWS_PROFILE_NAME="d2i_stg"
+AWS_PROFILE_NAME="${AWS_PROFILE:-default}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

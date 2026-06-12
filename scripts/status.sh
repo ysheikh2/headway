@@ -191,7 +191,7 @@ echo
 
 # --- AWS SSO status ---
 echo "[ AWS Credentials ]"
-AWS_PROFILE_NAME="${AWS_PROFILE:-d2i_stg}"
+AWS_PROFILE_NAME="${AWS_PROFILE:-default}"
 if AWS_REGION="$AWS_REGION_NAME" AWS_DEFAULT_REGION="$AWS_REGION_NAME" aws sts get-caller-identity --profile "$AWS_PROFILE_NAME" &>/dev/null; then
   IDENTITY=$(AWS_REGION="$AWS_REGION_NAME" AWS_DEFAULT_REGION="$AWS_REGION_NAME" aws sts get-caller-identity --profile "$AWS_PROFILE_NAME" 2>/dev/null |
     python3 -c "import sys,json; d=json.load(sys.stdin); print(d['Arn'])" 2>/dev/null || echo "ok")

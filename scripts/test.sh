@@ -385,7 +385,7 @@ else
   else
     ERR=$(python3 -c "import json; d=json.load(open('$TMPFILE')); print(str(d)[:200])" 2>/dev/null || head -c 200 "$TMPFILE")
     fail "Bedrock request failed (HTTP $HTTP_CODE): $ERR"
-    info "AWS credentials issue? Run: aws sso login --profile ${BEDROCK_AWS_PROFILE:-d2i_prod}"
+    info "AWS credentials issue? Run: aws sso login --profile ${BEDROCK_AWS_PROFILE:-default}"
   fi
 fi
 echo
@@ -512,7 +512,7 @@ if [[ $FAIL -gt 0 ]]; then
   echo "  Some tests failed. Quick fixes:"
   echo "    Not running:  ./scripts/start.sh"
   echo "    Auth (403):   ./scripts/auth-fix.sh"
-  echo "    AWS expired:  aws sso login --profile ${BEDROCK_AWS_PROFILE:-d2i_prod}"
+    echo "    AWS expired:  aws sso login --profile ${BEDROCK_AWS_PROFILE:-default}"
   exit 1
 fi
 

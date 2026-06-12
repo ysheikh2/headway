@@ -8,7 +8,7 @@
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE="$DIR/docker-compose.yml"
-AWS_PROFILE_NAME="${AWS_PROFILE:-d2i_stg}"
+AWS_PROFILE_NAME="${AWS_PROFILE:-default}"
 GATEWAY="http://127.0.0.1:4000"
 
 while [[ $# -gt 0 ]]; do

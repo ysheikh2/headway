@@ -27,14 +27,14 @@ Copilot lane:
 
 Bedrock lane:
 - native Bedrock routes (`/model/{id}/converse`, `/model/{id}/converse-stream`)
-- Headroom signs and forwards requests directly to AWS using `d2i_prod` SSO profile
+- Headroom signs and forwards requests directly to AWS using `BEDROCK_AWS_PROFILE`
 
 ## Why this setup
 
 - Separate dedicated endpoints for Copilot and Bedrock
 - Copilot traffic goes through Headroom compression/memory
 - Bedrock traffic uses native Converse routes required by Kilo's `amazon-bedrock` provider
-- Bedrock auth uses AWS SSO profile chain (`d2i_prod`) — no API keys needed
+- Bedrock auth uses AWS SSO profile chain (`BEDROCK_AWS_PROFILE`) — no API keys needed
 - No custom local Python/pipx/npm install required
 
 ## Local Persistence
@@ -51,15 +51,15 @@ Runtime state is persisted under this repo (gitignored):
 2. Ensure AWS profiles are valid:
 
 ```bash
-aws sts get-caller-identity --profile d2i_stg   # LiteLLM model discovery
-aws sts get-caller-identity --profile d2i_prod  # Bedrock native lane
+aws sts get-caller-identity --profile "$AWS_PROFILE"           # LiteLLM model discovery
+aws sts get-caller-identity --profile "$BEDROCK_AWS_PROFILE"   # Bedrock native lane
 ```
 
 3. Build the Bedrock-native Headroom image (required until upstream PR #917 is released):
 
 ```bash
-# From the headroom source repo at commit c9e4822e:
-docker buildx build -f Dockerfile.bedrock-native -t headroom-local:bedrock-c9e4822e .
+# From the headroom source repo at commit ea563663:
+docker buildx build -f Dockerfile.bedrock-native -t headroom-local:bedrock-ea563663 .
 ```
 
 4. Configure Kilo providers to use this gateway:
@@ -200,14 +200,14 @@ For Bedrock, configure the client's `amazon-bedrock` (or equivalent) provider to
 Manual regeneration (optional):
 
 ```bash
-./scripts/generate-litellm-config.sh --aws-profile d2i_stg
+./scripts/generate-litellm-config.sh --aws-profile "$AWS_PROFILE"
 ```
 
 List Bedrock models available to your profile:
 
 ```bash
-aws bedrock list-foundation-models --profile d2i_stg --region eu-central-1
-aws bedrock list-inference-profiles --profile d2i_stg --region eu-central-1
+aws bedrock list-foundation-models --profile "$AWS_PROFILE" --region eu-central-1
+aws bedrock list-inference-profiles --profile "$AWS_PROFILE" --region eu-central-1
 ```
 
 ## Copilot Auth In LiteLLM
@@ -243,17 +243,17 @@ complete that login once. After success, tokens persist in `.data/litellm` and r
 ./scripts/auth-fix.sh
 ```
 
-- Bedrock native lane auth failures (`d2i_prod`):
+- Bedrock native lane auth failures (`BEDROCK_AWS_PROFILE`):
 
 ```bash
-aws sso login --profile d2i_prod
+aws sso login --profile "$BEDROCK_AWS_PROFILE"
 ./scripts/auth-fix.sh
 ```
 
-- Bedrock model discovery failures (`d2i_stg`):
+- Bedrock model discovery failures (`AWS_PROFILE` / `BEDROCK_DISCOVERY_PROFILE`):
 
 ```bash
-aws sso login --profile d2i_stg
+aws sso login --profile "$AWS_PROFILE"
 ./scripts/auth-fix.sh
 ```
 
@@ -271,6 +271,6 @@ docker logs headroom-bedrock-gateway --tail 100
 
 - headroom-gateway: `ghcr.io/chopratejas/headroom:code` on `127.0.0.1:4000` (Copilot lane)
 - litellm-gateway: `ghcr.io/berriai/litellm:main-stable` on `127.0.0.1:4001`
-- headroom-bedrock-gateway: `headroom-local:bedrock-c9e4822e` on `127.0.0.1:4002` (Bedrock lane)
+- headroom-bedrock-gateway: `${HEADROOM_BEDROCK_IMAGE}` on `127.0.0.1:4002` (Bedrock lane)
 
 All are managed from docker-compose.yml.

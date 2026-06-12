@@ -3,7 +3,7 @@
 # Run this after a Mac reboot or any time the gateway is not running.
 #
 # Usage: ./scripts/start.sh [--aws-profile <profile>]
-#   --aws-profile <name>   AWS SSO profile for Bedrock (default: d2i_stg)
+#   --aws-profile <name>   AWS SSO profile for LiteLLM discovery/runtime (default: AWS_PROFILE or "default")
 
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -11,7 +11,7 @@ COMPOSE="$DIR/docker-compose.yml"
 ENV_FILE="$DIR/.env"
 GATEWAY="http://127.0.0.1:4000"
 LITELLM_ADMIN="http://127.0.0.1:4001"
-AWS_PROFILE_NAME="d2i_stg"
+AWS_PROFILE_NAME="${AWS_PROFILE:-default}"
 GENERATOR="$DIR/scripts/generate-litellm-config.sh"
 AWS_REGION_NAME="eu-central-1"
 
