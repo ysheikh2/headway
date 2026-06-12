@@ -178,7 +178,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [detect-changes, shell-checks, python-checks]
-    if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && ((needs.detect-changes.outputs.shell == 'true' && needs.shell-checks.result == 'failure') || (needs.detect-changes.outputs.python == 'true' && needs.python-checks.result == 'failure'))
+    if: >-
+      always() &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (
+        (needs.detect-changes.outputs.shell == 'true' && needs.shell-checks.result == 'failure') ||
+        (needs.detect-changes.outputs.python == 'true' && needs.python-checks.result == 'failure')
+      )
     permissions:
       contents: write
 
