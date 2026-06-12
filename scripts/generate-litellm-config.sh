@@ -93,6 +93,11 @@ if [[ -z "$COPILOT_TOKEN_FILE" && -f "${GITHUB_COPILOT_TOKEN_DIR:-$HOME/.config/
   COPILOT_TOKEN_FILE="${GITHUB_COPILOT_TOKEN_DIR:-$HOME/.config/litellm/github_copilot}/api-key.json"
 fi
 
+# Repo-local fallback (this workspace mounts ./.data/litellm into the container).
+if [[ -z "$COPILOT_TOKEN_FILE" && -f "$DIR/.data/litellm/github_copilot/api-key.json" ]]; then
+  COPILOT_TOKEN_FILE="$DIR/.data/litellm/github_copilot/api-key.json"
+fi
+
 TMP_OUTPUT_FILE="$TMP_DIR/litellm_config.yaml"
 python3 "$DIR/scripts/_generate_config.py" "$TMP_DIR" "$TMP_OUTPUT_FILE" "${COPILOT_TOKEN_FILE:-}"
 

@@ -78,14 +78,21 @@ if ! bash "$GENERATOR" --aws-profile "$AWS_PROFILE_NAME" --output "$DIR/litellm_
 fi
 echo
 
-# ── Restart litellm-gateway ────────────────────────────────────────────────────
-echo "[ Restarting litellm-gateway with fresh credentials ]"
+# ── Restart gateways ───────────────────────────────────────────────────────────
+echo "[ Restarting gateways with fresh credentials ]"
 cd "$DIR"
-docker compose -f "$COMPOSE" down 2>/dev/null || true
+
+# Restart Copilot lane first. This must succeed for Copilot auth recovery.
 docker rm -f litellm-gateway 2>/dev/null || true
 docker rm -f headroom-gateway 2>/dev/null || true
+docker compose -f "$COMPOSE" up -d litellm headroom
+
+# Bedrock lane is best-effort here: a missing image must not block Copilot auth fix.
 docker rm -f headroom-bedrock-gateway 2>/dev/null || true
-docker compose -f "$COMPOSE" up -d
+if ! docker compose -f "$COMPOSE" up -d headroom-bedrock; then
+  echo "  WARNING: headroom-bedrock failed to start (image/tag may be missing)."
+  echo "  Copilot lane is still running; fix HEADROOM_BEDROCK_IMAGE and restart Bedrock lane later."
+fi
 echo
 
 # ── Wait for healthy ───────────────────────────────────────────────────────────
@@ -113,6 +120,19 @@ if [[ -z "$LIVE" ]]; then
     echo "  Open: https://github.com/login/device"
   fi
   exit 1
+fi
+
+# If Copilot aliases were not generated, surface a direct auth hint.
+if ! grep -q '^  - model_name: copilot-' "$DIR/litellm_config.yaml" 2>/dev/null; then
+  echo "WARNING: No named copilot-* aliases found in litellm_config.yaml."
+  echo "         This usually means Copilot token refresh is required (401 from models API)."
+  CODE_LINE=$(docker logs litellm-gateway 2>/dev/null | grep -E 'Please visit https://github.com/login/device and enter code' | tail -1 || true)
+  if [[ -n "$CODE_LINE" ]]; then
+    echo "  Device auth pending: $CODE_LINE"
+    echo "  Open: https://github.com/login/device"
+  else
+    echo "  Check: docker logs litellm-gateway"
+  fi
 fi
 echo
 
