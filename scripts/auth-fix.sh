@@ -55,13 +55,13 @@ echo
 append_if_missing() {
   local key="$1" value="$2"
   if [[ ! -f "$ENV_FILE" ]] || ! grep -q "^${key}=" "$ENV_FILE"; then
-    echo "${key}=${value}" >> "$ENV_FILE"
+    echo "${key}=${value}" >>"$ENV_FILE"
     echo "  added: ${key}=${value}"
   fi
 }
 [[ -f "$ENV_FILE" ]] || touch "$ENV_FILE"
-append_if_missing "AWS_PROFILE"               "$AWS_PROFILE_NAME"
-append_if_missing "BEDROCK_AWS_PROFILE"       "$AWS_PROFILE_NAME"
+append_if_missing "AWS_PROFILE" "$AWS_PROFILE_NAME"
+append_if_missing "BEDROCK_AWS_PROFILE" "$AWS_PROFILE_NAME"
 append_if_missing "BEDROCK_DISCOVERY_PROFILE" "$AWS_PROFILE_NAME"
 echo "[ .env checked (existing values untouched): $ENV_FILE ]"
 echo
