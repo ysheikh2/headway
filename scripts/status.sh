@@ -40,6 +40,11 @@ if docker ps --format '{{.Names}}' | grep -q "^headroom-gateway$"; then
 else
   echo "  headroom-gateway: NOT RUNNING"
 fi
+if docker ps --format '{{.Names}}' | grep -q "^headroom-bedrock-gateway$"; then
+  docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}' | grep headroom-bedrock-gateway
+else
+  echo "  headroom-bedrock-gateway: NOT RUNNING"
+fi
 if ! docker ps --format '{{.Names}}' | grep -q "^litellm-gateway$"; then
   echo "  To start: cd $DIR && ./scripts/start.sh"
 fi
@@ -54,6 +59,34 @@ if [[ -n "$LIVE" ]]; then
 else
   echo "  Status: UNREACHABLE"
   echo "  Endpoint: $GATEWAY/livez"
+fi
+echo
+
+# --- Bedrock headroom gateway health (:4002) ---
+echo "[ Bedrock Headroom :4002 ]"
+BEDROCK_GATEWAY="http://127.0.0.1:4002"
+BEDROCK_LIVE=$(curl_with_retries "$BEDROCK_GATEWAY/healthz" 6 1 || true)
+if [[ -n "$BEDROCK_LIVE" ]]; then
+  echo "  Status: healthy"
+  echo "  Endpoint: $BEDROCK_GATEWAY (native Bedrock routes, direct to AWS)"
+  BEDROCK_IMG=$(docker ps --format '{{.Image}}' --filter 'name=^headroom-bedrock-gateway$' | head -1 || true)
+  if [[ -n "$BEDROCK_IMG" ]]; then
+    echo "  Image: $BEDROCK_IMG"
+  fi
+  B_STATS=$(curl_with_retries "$BEDROCK_GATEWAY/stats" 4 1 || true)
+  if [[ -n "$B_STATS" ]]; then
+    echo "$B_STATS" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+s = d.get('summary', {})
+c = s.get('compression', {})
+print(f\"  API requests: {s.get('api_requests', '?')}\")
+print(f\"  Tokens removed: {c.get('total_tokens_removed', '?')}\")
+" 2>/dev/null || true
+  fi
+else
+  echo "  Status: UNREACHABLE"
+  echo "  Endpoint: $BEDROCK_GATEWAY/healthz"
 fi
 echo
 
@@ -112,14 +145,42 @@ echo
 echo "[ Kilo Config ]"
 KILO_CONF="$HOME/.config/kilo/kilo.jsonc"
 if [[ -f "$KILO_CONF" ]]; then
-  if grep -q '"github-copilot"' "$KILO_CONF" 2>/dev/null &&
-    grep -q '"openai-compatible"' "$KILO_CONF" 2>/dev/null &&
-    grep -q '"baseURL": "http://127.0.0.1:4000/v1"' "$KILO_CONF" 2>/dev/null; then
-    echo "  kilo.jsonc: baseURL points to gateway ✓"
-    grep '"baseURL"' "$KILO_CONF" | sed 's/^/  /'
+  if python3 -c "
+import json, pathlib, re, sys
+p = pathlib.Path('$KILO_CONF')
+text = p.read_text(encoding='utf-8')
+text = re.sub(r'/\*.*?\*/', '', text, flags=re.S)
+text = re.sub(r'(^\s*)//.*$', '', text, flags=re.M)
+data = json.loads(text)
+provider = data.get('provider', {})
+for key in ('github-copilot', 'openai-compatible'):
+    opts = provider.get(key, {}).get('options', {})
+    url = opts.get('baseURL', '')
+    if url and url != 'http://127.0.0.1:4000/v1':
+        raise SystemExit(1)
+bedrock_opts = provider.get('amazon-bedrock', {}).get('options', {})
+bedrock_url = bedrock_opts.get('baseURL', '')
+if bedrock_url and bedrock_url not in ('http://127.0.0.1:4002', 'http://127.0.0.1:4002/v1'):
+    raise SystemExit(1)
+" 2>/dev/null; then
+    echo "  kilo.jsonc: baseURLs correct"
+    python3 -c "
+import json, pathlib, re
+p = pathlib.Path('$KILO_CONF')
+text = p.read_text()
+text = re.sub(r'/\*.*?\*/', '', text, flags=re.S)
+text = re.sub(r'(^\s*)//.*$', '', text, flags=re.M)
+d = json.loads(text)
+provider = d.get('provider', {})
+for k, v in provider.items():
+    opts = v.get('options', {}) if isinstance(v, dict) else {}
+    url = opts.get('baseURL')
+    if url: print(f'    {k}: {url}')
+" 2>/dev/null || true
   else
-    echo "  kilo.jsonc: WARNING — provider baseURL entries are not fully aligned"
-    echo "  Expected: \"baseURL\": \"http://127.0.0.1:4000/v1\""
+    echo "  kilo.jsonc: WARNING — provider baseURLs not fully aligned"
+    echo "  Expected: github-copilot + openai-compatible -> http://127.0.0.1:4000/v1"
+    echo "  Expected: amazon-bedrock                    -> http://127.0.0.1:4002"
     echo "  Run: ./scripts/setup-kilo.sh"
   fi
 else

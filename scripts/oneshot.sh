@@ -38,4 +38,6 @@ bash "$DIR/scripts/status.sh"
 echo
 
 echo "=== Complete ==="
-echo "Configured providers now point to: http://127.0.0.1:4000/v1"
+echo "Configured providers:"
+echo "  github-copilot / openai-compatible -> http://127.0.0.1:4000/v1"
+echo "  amazon-bedrock                     -> http://127.0.0.1:4002"

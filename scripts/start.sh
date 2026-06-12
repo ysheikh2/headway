@@ -72,7 +72,18 @@ echo
 # ── Pull images ───────────────────────────────────────────────────────────────
 echo "[ Pulling latest images ]"
 cd "$DIR"
-docker compose -f "$COMPOSE" pull
+docker compose -f "$COMPOSE" pull litellm headroom
+
+# Bedrock lane may use a local git-commit build tag
+# (e.g. headroom-local:bedrock-c9e4822e). Pull only when
+# the configured image is remote.
+BEDROCK_IMAGE=$(docker compose -f "$COMPOSE" config --format json 2>/dev/null |
+  python3 -c "import json,sys; print(json.load(sys.stdin)['services'].get('headroom-bedrock',{}).get('image',''))" 2>/dev/null || echo "")
+if [[ -n "$BEDROCK_IMAGE" && "$BEDROCK_IMAGE" == *"/"* ]]; then
+  docker compose -f "$COMPOSE" pull headroom-bedrock
+else
+  echo "  Skipping pull for headroom-bedrock image: ${BEDROCK_IMAGE:-<unset>}"
+fi
 echo
 
 # ── Stop old containers ────────────────────────────────────────────────────────
@@ -80,6 +91,7 @@ echo "[ Stopping existing containers ]"
 docker compose -f "$COMPOSE" down 2>/dev/null || true
 docker rm -f headroom-gateway 2>/dev/null || true
 docker rm -f litellm-gateway 2>/dev/null || true
+docker rm -f headroom-bedrock-gateway 2>/dev/null || true
 echo
 
 # ── Start ──────────────────────────────────────────────────────────────────────

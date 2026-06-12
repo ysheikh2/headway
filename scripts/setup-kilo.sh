@@ -44,9 +44,15 @@ oa_options = oa.setdefault("options", {})
 oa_options["baseURL"] = "http://127.0.0.1:4000/v1"
 oa_options.setdefault("apiKey", "local")
 
+bedrock = provider.setdefault("amazon-bedrock", {})
+bedrock_options = bedrock.setdefault("options", {})
+bedrock_options["baseURL"] = "http://127.0.0.1:4002"
+
 kilo_conf.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 print(f"[write] {kilo_conf}")
 PY
 
 echo
-echo "Kilo provider baseURLs are now set to: http://127.0.0.1:4000/v1"
+echo "Kilo provider baseURLs:"
+echo "  github-copilot / openai-compatible -> http://127.0.0.1:4000/v1"
+echo "  amazon-bedrock                     -> http://127.0.0.1:4002"

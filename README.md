@@ -1,69 +1,80 @@
 # LiteLLM + Headroom Gateway (Kilo + Any OpenAI-Compatible Client)
 
-This repository runs a local two-container gateway so clients can use both providers through one endpoint:
+This repository runs a local three-container gateway so clients can use both providers through dedicated endpoints:
 
-- GitHub Copilot (via Headroom proxy compression)
-- AWS Bedrock (via LiteLLM with AWS profile auth)
+- GitHub Copilot (via Headroom proxy compression + LiteLLM)
+- AWS Bedrock (via Headroom proxy with native Bedrock routes, direct to AWS)
 
 Primary usage in this repo is Kilo, but any client/extension that supports an OpenAI-compatible `baseURL` can use the same endpoint.
 
-Default local endpoint:
+Local endpoints:
 
-- http://127.0.0.1:4000/v1
+- GitHub Copilot: `http://127.0.0.1:4000/v1`
+- AWS Bedrock: `http://127.0.0.1:4002`
 
 Learn more about [Headroom](https://github.com/chopratejas/headroom) and [LiteLLM](https://github.com/BerriAI/litellm) at their Github repos.
 
 ## Request Flow
 
-Both providers are handled by LiteLLM, with Headroom as the single frontend:
+```
+Kilo (Copilot)  -> Headroom :4000 -> LiteLLM :4001 -> GitHub Copilot
+Kilo (Bedrock)  -> Headroom :4002 (native Bedrock routes) -> AWS Bedrock
+```
 
-Kilo -> Headroom (:4000) -> LiteLLM (:4001 backend)
-- bedrock-* models -> AWS Bedrock
-- all non-bedrock models (`*`) -> LiteLLM GitHub Copilot provider (`github_copilot/*`)
+Copilot lane:
+- `copilot-*` named aliases → GitHub Copilot (auto-discovered)
+- all other models (`*`) → `github_copilot/*` (wildcard fallback)
 
-Why this topology:
-
-- Headroom has one upstream connection (LiteLLM).
-- LiteLLM remains the provider router for both Bedrock and GitHub Copilot.
-- Headroom compression/memory still applies to all traffic entering through Headroom.
+Bedrock lane:
+- native Bedrock routes (`/model/{id}/converse`, `/model/{id}/converse-stream`)
+- Headroom signs and forwards requests directly to AWS using `d2i_prod` SSO profile
 
 ## Why this setup
 
-- One endpoint in Kilo for both providers
-- Also works for other OpenAI-compatible editors/CLI tools/extensions
-- Copilot traffic still goes through Headroom compression
-- Bedrock works with normal AWS SSO/profile auth
+- Separate dedicated endpoints for Copilot and Bedrock
+- Copilot traffic goes through Headroom compression/memory
+- Bedrock traffic uses native Converse routes required by Kilo's `amazon-bedrock` provider
+- Bedrock auth uses AWS SSO profile chain (`d2i_prod`) — no API keys needed
 - No custom local Python/pipx/npm install required
 
 ## Local Persistence
 
 Runtime state is persisted under this repo (gitignored):
 
-- `.data/headroom` — Headroom memory/compression state
+- `.data/headroom` — Headroom memory/compression state (Copilot lane)
+- `.data/headroom-bedrock` — Headroom state (Bedrock lane)
 - `.data/litellm` — LiteLLM local provider/token cache state
 
 ## Quick Start
 
 1. Ensure Docker Desktop is running.
-2. Ensure AWS profile is valid (default profile used by scripts is d2i_stg):
+2. Ensure AWS profiles are valid:
 
 ```bash
-aws sts get-caller-identity --profile d2i_stg
+aws sts get-caller-identity --profile d2i_stg   # LiteLLM model discovery
+aws sts get-caller-identity --profile d2i_prod  # Bedrock native lane
 ```
 
-3. Configure Kilo providers to use this gateway:
+3. Build the Bedrock-native Headroom image (required until upstream PR #917 is released):
+
+```bash
+# From the headroom source repo at commit c9e4822e:
+docker buildx build -f Dockerfile.bedrock-native -t headroom-local:bedrock-c9e4822e .
+```
+
+4. Configure Kilo providers to use this gateway:
 
 ```bash
 ./scripts/setup-kilo.sh
 ```
 
-4. Start everything:
+5. Start everything:
 
 ```bash
 ./scripts/start.sh
 ```
 
-5. Validate:
+6. Validate:
 
 ```bash
 ./scripts/test.sh
@@ -128,7 +139,7 @@ Set it automatically:
 ./scripts/setup-kilo.sh
 ```
 
-Provider routing should point to port 4000:
+Provider routing:
 
 ```json
 {
@@ -142,6 +153,11 @@ Provider routing should point to port 4000:
       "options": {
         "baseURL": "http://127.0.0.1:4000/v1",
         "apiKey": "local"
+      }
+    },
+    "amazon-bedrock": {
+      "options": {
+        "baseURL": "http://127.0.0.1:4002"
       }
     }
   }
@@ -157,18 +173,18 @@ Use these settings for chat tools that support OpenAI-compatible custom endpoint
 3. Set API key to `local` (or any non-empty placeholder expected by the UI).
 4. Use model names exposed by this gateway:
   - Copilot route: `claude-haiku-4.5`, `gemini-3.5-flash`, etc.
-  - Bedrock route: `bedrock-*` aliases from `/v1/models`.
+  - Bedrock route via Kilo: configure `amazon-bedrock` provider with `baseURL: http://127.0.0.1:4002`.
 
 Important: Native GitHub Copilot Chat in VS Code does not provide a standard custom `baseURL` override for replacing GitHub backend calls. For gateway usage in VS Code, prefer chat tools/providers that support OpenAI-compatible endpoint configuration.
 
 ## Other Clients
 
-Any client that supports an OpenAI-compatible API endpoint can use this gateway by setting:
+Any client that supports an OpenAI-compatible API endpoint can use the Copilot lane by setting:
 
 - base URL: `http://127.0.0.1:4000/v1`
 - API key: `local` (or any non-empty placeholder if the client requires one)
 
-Examples include editor extensions, CLI tools, local app backends, and custom scripts that can target OpenAI-compatible chat/completions endpoints.
+For Bedrock, configure the client's `amazon-bedrock` (or equivalent) provider to use `http://127.0.0.1:4002`.
 
 ## Model Notes
 
@@ -207,6 +223,7 @@ complete that login once. After success, tokens persist in `.data/litellm` and r
 ## Scripts
 
 - scripts/start.sh: refresh creds, pull images, start stack
+- scripts/update.sh: pull latest images and restart in-place
 - scripts/stop.sh: stop the running stack (preserves volumes and tokens)
 - scripts/auth-fix.sh: refresh AWS auth, restart stack, and print Copilot device code hints if needed
 - scripts/setup-kilo.sh: enforce Kilo provider baseURLs for this gateway
@@ -226,7 +243,14 @@ complete that login once. After success, tokens persist in `.data/litellm` and r
 ./scripts/auth-fix.sh
 ```
 
-- Bedrock auth failures:
+- Bedrock native lane auth failures (`d2i_prod`):
+
+```bash
+aws sso login --profile d2i_prod
+./scripts/auth-fix.sh
+```
+
+- Bedrock model discovery failures (`d2i_stg`):
 
 ```bash
 aws sso login --profile d2i_stg
@@ -240,11 +264,13 @@ docker compose down
 docker compose up -d
 docker logs litellm-gateway --tail 100
 docker logs headroom-gateway --tail 100
+docker logs headroom-bedrock-gateway --tail 100
 ```
 
 ## Compose Services
 
-- headroom-gateway: ghcr.io/chopratejas/headroom:code on 127.0.0.1:4000
-- litellm-gateway: ghcr.io/berriai/litellm:main-stable on 127.0.0.1:4001
+- headroom-gateway: `ghcr.io/chopratejas/headroom:code` on `127.0.0.1:4000` (Copilot lane)
+- litellm-gateway: `ghcr.io/berriai/litellm:main-stable` on `127.0.0.1:4001`
+- headroom-bedrock-gateway: `headroom-local:bedrock-c9e4822e` on `127.0.0.1:4002` (Bedrock lane)
 
-Both are managed from docker-compose.yml.
+All are managed from docker-compose.yml.

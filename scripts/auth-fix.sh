@@ -67,6 +67,7 @@ cd "$DIR"
 docker compose -f "$COMPOSE" down 2>/dev/null || true
 docker rm -f litellm-gateway 2>/dev/null || true
 docker rm -f headroom-gateway 2>/dev/null || true
+docker rm -f headroom-bedrock-gateway 2>/dev/null || true
 docker compose -f "$COMPOSE" up -d
 echo
 
