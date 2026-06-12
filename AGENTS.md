@@ -33,10 +33,10 @@ Kilo endpoints:
 - Role: upstream provider router (Bedrock + GitHub Copilot)
 
 3. `headroom-bedrock-gateway`
-- Image: `${HEADROOM_BEDROCK_IMAGE}` (default `headroom-local:bedrock-ea563663`, built from commit `ea563663`)
+- Image: `${HEADROOM_BEDROCK_IMAGE:-ghcr.io/ysheikh2/headroom-proxy:bedrock-native}` — Rust binary built from `chopratejas/headroom` via `.github/workflows/docker-bedrock-native.yml`
 - Port: `127.0.0.1:4002` (container `:8787`)
 - Upstream: AWS Bedrock Runtime (native Bedrock routes)
-- Auth: AWS profile chain (`AWS_PROFILE`, mounted `~/.aws`)
+- Auth: AWS profile chain (`BEDROCK_AWS_PROFILE`, mounted `~/.aws`)
 - Role: dedicated native Bedrock lane with `converse` + `converse-stream` support
 
 ### Routing
@@ -54,7 +54,7 @@ Request flow:
 Important semantics:
 
 - Copilot lane uses published `ghcr.io/chopratejas/headroom:code`.
-- Bedrock lane uses a git-commit-pinned image (`c9e4822e`) until upstream PR #917 is released.
+- Bedrock lane uses `ghcr.io/ysheikh2/headroom-proxy:bedrock-native`, a Rust binary built from `chopratejas/headroom` main (includes PR #917 converse-stream support).
 - Named `copilot-*` entries are generated dynamically by `generate-litellm-config.sh`.
 - The wildcard catches any Copilot model not explicitly listed.
 
@@ -67,9 +67,11 @@ Practical effect:
 
 **Default:** do not build custom Docker images or modify the headroom source repo.
 
-**Temporary exception for Bedrock native route validation:** use
-`HEADROOM_BEDROCK_IMAGE` (default `headroom-local:bedrock-ea563663`) built from
-git commit `ea563663` until PR #917 is merged and released upstream.
+The Bedrock lane (`headroom-bedrock-gateway`) uses a Rust binary built from
+`chopratejas/headroom` via `.github/workflows/docker-bedrock-native.yml` and
+pushed to `ghcr.io/ysheikh2/headroom-proxy:bedrock-native`. This is necessary
+because the upstream Python image (`ghcr.io/chopratejas/headroom:code`) does not
+expose native Bedrock routes — those are in the Rust proxy crate.
 
 ## Why Bedrock Uses Native Routes on :4002
 

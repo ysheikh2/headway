@@ -4,8 +4,9 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  HEADROOM_SOURCE_REPO: ysheikh2/headroom
-  HEADROOM_SOURCE_REF: 053a5b94ded45309c144577c92982562d4f97843
+  # Source is now upstream chopratejas/headroom — PR #917 (converse-stream) merged at b08ec15b.
+  HEADROOM_SOURCE_REPO: chopratejas/headroom
+  HEADROOM_SOURCE_REF: b08ec15b0d392b8b8cf93dbadaee4b7e6b465f1c
 
 "on":
   workflow_dispatch:
@@ -13,11 +14,11 @@ env:
       headroom_source_repo:
         description: "Headroom source repo (owner/name)"
         required: false
-        default: "ysheikh2/headroom"
+        default: "chopratejas/headroom"
       headroom_source_ref:
         description: "Headroom source ref (commit/tag/branch)"
         required: false
-        default: "053a5b94ded45309c144577c92982562d4f97843"
+        default: "b08ec15b0d392b8b8cf93dbadaee4b7e6b465f1c"
   push:
     branches: [main]
     paths:

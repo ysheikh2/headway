@@ -11,9 +11,18 @@ COMPOSE="$DIR/docker-compose.yml"
 ENV_FILE="$DIR/.env"
 GATEWAY="http://127.0.0.1:4000"
 LITELLM_ADMIN="http://127.0.0.1:4001"
-AWS_PROFILE_NAME="${AWS_PROFILE:-default}"
 GENERATOR="$DIR/scripts/generate-litellm-config.sh"
 AWS_REGION_NAME="eu-central-1"
+
+# Source .env first so its values take precedence over the shell environment.
+# Shell env is only the fallback when .env doesn't exist or a key is absent.
+if [[ -f "$ENV_FILE" ]]; then
+  set -o allexport
+  # shellcheck source=/dev/null
+  source "$ENV_FILE"
+  set +o allexport
+fi
+AWS_PROFILE_NAME="${AWS_PROFILE:-default}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -50,11 +59,19 @@ AWS_IDENTITY=$(AWS_REGION="$AWS_REGION_NAME" AWS_DEFAULT_REGION="$AWS_REGION_NAM
 echo "  $AWS_IDENTITY"
 echo
 
-# ── Write .env ─────────────────────────────────────────────────────────────────
-cat >"$ENV_FILE" <<EOF
-AWS_PROFILE=$AWS_PROFILE_NAME
-EOF
-echo "[ .env written: $ENV_FILE ]"
+# ── Populate .env — only add keys that are missing; never overwrite existing ───
+append_if_missing() {
+  local key="$1" value="$2"
+  if [[ ! -f "$ENV_FILE" ]] || ! grep -q "^${key}=" "$ENV_FILE"; then
+    echo "${key}=${value}" >>"$ENV_FILE"
+    echo "  added: ${key}=${value}"
+  fi
+}
+[[ -f "$ENV_FILE" ]] || touch "$ENV_FILE"
+append_if_missing "AWS_PROFILE" "$AWS_PROFILE_NAME"
+append_if_missing "BEDROCK_AWS_PROFILE" "$AWS_PROFILE_NAME"
+append_if_missing "BEDROCK_DISCOVERY_PROFILE" "$AWS_PROFILE_NAME"
+echo "[ .env checked (existing values untouched): $ENV_FILE ]"
 echo
 
 # ── Generate LiteLLM config from Bedrock model discovery ─────────────────────
