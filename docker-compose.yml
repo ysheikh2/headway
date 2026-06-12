@@ -5,7 +5,7 @@
 #   Kilo (Bedrock)  -> Headroom :4002 (native Bedrock routes) -> AWS Bedrock
 #
 # Copilot lane uses ghcr.io/chopratejas/headroom:code.
-# Bedrock lane uses HEADROOM_BEDROCK_IMAGE (default points to fork-published native image).
+# Bedrock lane uses HEADROOM_BEDROCK_IMAGE (default GHCR tag shown below).
 # Runtime state is persisted in-repo under .data/ (gitignored).
 
 services:
@@ -69,7 +69,7 @@ services:
       - ./.data/headroom:/root/.headroom
 
   headroom-bedrock:
-    image: ${HEADROOM_BEDROCK_IMAGE:-headroom-local:bedrock-c9e4822e}
+    image: ${HEADROOM_BEDROCK_IMAGE:-ghcr.io/ysheikh2/headroom-proxy:bedrock-native}
     container_name: headroom-bedrock-gateway
     restart: unless-stopped
     ports:

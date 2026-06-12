@@ -397,7 +397,7 @@ if [[ -z "$BEDROCK_TEST_MODEL" ]]; then
   info "Fix: ./scripts/start.sh"
 elif ! bedrock_native_routes_available "$BEDROCK_NATIVE_GATEWAY"; then
   fail "Bedrock :4002 does not expose native /model/{id}/converse routes"
-  info "Image lacks native Bedrock route surface; rebuild headroom-local:bedrock-c9e4822e from feat/bedrock-converse-stream-route"
+  info "Image lacks native Bedrock route surface; set HEADROOM_BEDROCK_IMAGE to a native bedrock image and restart"
 else
   RESOLVED=$(resolve_bedrock_native_model "$BEDROCK_TEST_MODEL")
   BEDROCK_NATIVE_MODEL=$(echo "$RESOLVED" | awk '{print $1}')

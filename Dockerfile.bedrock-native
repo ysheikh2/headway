@@ -1,0 +1,30 @@
+FROM rust:1.95-bookworm AS builder
+
+ARG HEADROOM_GIT_REPO=ysheikh2/headroom
+ARG HEADROOM_GIT_REF=053a5b94ded45309c144577c92982562d4f97843
+
+WORKDIR /src
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --filter=blob:none "https://github.com/${HEADROOM_GIT_REPO}.git" headroom
+
+WORKDIR /src/headroom
+
+RUN git checkout "${HEADROOM_GIT_REF}"
+
+RUN cargo build --release -p headroom-proxy
+
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /src/headroom/target/release/headroom-proxy /usr/local/bin/headroom-proxy
+
+EXPOSE 8787
+
+ENTRYPOINT ["headroom-proxy"]

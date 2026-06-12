@@ -50,7 +50,7 @@ echo
 echo "[ Pulling latest images ]"
 docker compose -f "$COMPOSE" pull litellm headroom
 
-# Bedrock lane may be pinned to a local git-commit build tag.
+# Bedrock lane may use a local image tag.
 BEDROCK_IMAGE=$(docker compose -f "$COMPOSE" config --format json 2>/dev/null |
   python3 -c "import json,sys; print(json.load(sys.stdin)['services'].get('headroom-bedrock',{}).get('image',''))" 2>/dev/null || echo "")
 if [[ -n "$BEDROCK_IMAGE" && "$BEDROCK_IMAGE" == *"/"* ]]; then

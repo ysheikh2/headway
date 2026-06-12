@@ -84,8 +84,8 @@ if [[ "$PRUNE_IMAGES" == true ]]; then
   echo "[5/5] Removing local Docker images"
   docker image rm ghcr.io/chopratejas/headroom:code 2>/dev/null || true
   docker image rm ghcr.io/berriai/litellm:main-stable 2>/dev/null || true
-  # Also attempt to remove the pinned Bedrock-native image if present
-  docker image rm headroom-local:bedrock-c9e4822e 2>/dev/null || true
+  # Also attempt to remove a commonly used Bedrock-native image tag if present
+  docker image rm ghcr.io/ysheikh2/headroom-proxy:bedrock-native 2>/dev/null || true
 else
   echo "[5/5] Keeping local Docker images"
 fi
