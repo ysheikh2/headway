@@ -4,8 +4,9 @@
 #   Kilo (Copilot)  -> Headroom :4000 -> LiteLLM :4001 -> GitHub Copilot
 #   Kilo (Bedrock)  -> Headroom :4002 (native Bedrock routes) -> AWS Bedrock
 #
-# Copilot lane uses ghcr.io/chopratejas/headroom:code.
-# Bedrock lane uses HEADROOM_BEDROCK_IMAGE (default GHCR tag shown below).
+# Copilot lane uses ghcr.io/chopratejas/headroom:code (Python proxy).
+# Bedrock lane uses HEADROOM_BEDROCK_IMAGE — a Rust binary built from
+# chopratejas/headroom via docker-bedrock-native workflow and pushed to GHCR.
 # Runtime state is persisted in-repo under .data/ (gitignored).
 
 services:
