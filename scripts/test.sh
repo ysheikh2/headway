@@ -410,8 +410,8 @@ else
     # If the model's region differs from the proxy's configured region, restart the proxy
     # with the correct region so SigV4 targets the right Bedrock endpoint.
     CURRENT_PROXY_REGION=$(docker inspect headroom-bedrock-gateway \
-      --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
-      | grep 'HEADROOM_PROXY_BEDROCK_REGION=' | cut -d= -f2 || echo "eu-central-1")
+      --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null |
+      grep 'HEADROOM_PROXY_BEDROCK_REGION=' | cut -d= -f2 || echo "eu-central-1")
     if [[ "$BEDROCK_NATIVE_REGION" != "$CURRENT_PROXY_REGION" ]]; then
       info "Model region ($BEDROCK_NATIVE_REGION) differs from proxy region ($CURRENT_PROXY_REGION); restarting proxy..."
       AWS_REGION="$BEDROCK_NATIVE_REGION" docker compose up -d headroom-bedrock >/dev/null 2>&1
@@ -444,7 +444,7 @@ elif 'output' in d:
     TMPFILE=$(make_tmp)
     run_bedrock_converse_stream "$BEDROCK_NATIVE_GATEWAY" "$BEDROCK_NATIVE_MODEL" "Reply with the single word: BEDROCKSTREAMOK" "$TMPFILE"
     # converse-stream uses EventStream passthrough — check for raw binary response bytes
-    STREAM_BYTES=$(wc -c < "$TMPFILE" 2>/dev/null | tr -d ' ')
+    STREAM_BYTES=$(wc -c <"$TMPFILE" 2>/dev/null | tr -d ' ')
     if [[ "$HTTP_CODE" == "200" ]] && [[ "${STREAM_BYTES:-0}" -gt 0 ]]; then
       ok "Bedrock :4002 converse-stream passed (HTTP $HTTP_CODE, EventStream bytes: $STREAM_BYTES, model: $BEDROCK_NATIVE_MODEL, region: $BEDROCK_NATIVE_REGION)"
     else

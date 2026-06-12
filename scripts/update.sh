@@ -13,8 +13,14 @@ GATEWAY="http://127.0.0.1:4000"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --aws-profile) AWS_PROFILE_NAME="$2"; shift 2 ;;
-    *) echo "Unknown arg: $1"; exit 1 ;;
+    --aws-profile)
+      AWS_PROFILE_NAME="$2"
+      shift 2
+      ;;
+    *)
+      echo "Unknown arg: $1"
+      exit 1
+      ;;
   esac
 done
 
@@ -31,8 +37,8 @@ echo
 # Show what we have now
 echo "[ Current image digests ]"
 for svc in headroom litellm headroom-bedrock; do
-  img=$(docker compose -f "$COMPOSE" config --format json 2>/dev/null \
-        | python3 -c "import json,sys; s=json.load(sys.stdin)['services']; print(s.get('$svc',{}).get('image','?'))" 2>/dev/null || echo "?")
+  img=$(docker compose -f "$COMPOSE" config --format json 2>/dev/null |
+    python3 -c "import json,sys; s=json.load(sys.stdin)['services']; print(s.get('$svc',{}).get('image','?'))" 2>/dev/null || echo "?")
   if [[ "$img" != "?" ]]; then
     id=$(docker images --no-trunc --quiet "$img" 2>/dev/null | head -1 || true)
     echo "  $svc: $img ${id:+(${id:7:12})}"
