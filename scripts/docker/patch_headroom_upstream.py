@@ -63,10 +63,10 @@ def patch_bedrock_anthropic_vendor_match(root: Path) -> None:
             'const ANTHROPIC_VENDOR_PREFIX: &str = "anthropic.";\n',
             'const ANTHROPIC_VENDOR_PREFIX: &str = "anthropic.";\n'
             'const ANTHROPIC_VENDOR_SEGMENT: &str = ".anthropic.";\n\n'
-            'fn is_anthropic_model_id(model_id: &str) -> bool {\n'
-            '    model_id.starts_with(ANTHROPIC_VENDOR_PREFIX)\n'
-            '        || model_id.contains(ANTHROPIC_VENDOR_SEGMENT)\n'
-            '}\n',
+            "fn is_anthropic_model_id(model_id: &str) -> bool {\n"
+            "    model_id.starts_with(ANTHROPIC_VENDOR_PREFIX)\n"
+            "        || model_id.contains(ANTHROPIC_VENDOR_SEGMENT)\n"
+            "}\n",
             f"anthropic vendor matcher patch ({target.name})",
         )
 

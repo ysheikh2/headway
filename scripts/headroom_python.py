@@ -451,7 +451,9 @@ def _lifecycle_rank(status: str) -> int:
     return 0
 
 
-def _pick_better(existing: tuple[str, str, str] | None, candidate: tuple[str, str, str]) -> tuple[str, str, str]:
+def _pick_better(
+    existing: tuple[str, str, str] | None, candidate: tuple[str, str, str]
+) -> tuple[str, str, str]:
     if existing is None:
         return candidate
     return candidate if _region_rank(candidate[2]) < _region_rank(existing[2]) else existing
@@ -515,7 +517,9 @@ def _fetch_copilot_models(token_file: str) -> list[str]:
         print(f"[generator] Copilot chat models (enabled, picker): {len(models)}")
         return models
     except urllib.error.HTTPError as exc:
-        print(f"[generator] WARNING: Copilot model API HTTP error ({exc.code}); skipping named entries")
+        print(
+            f"[generator] WARNING: Copilot model API HTTP error ({exc.code}); skipping named entries"
+        )
         return []
     except urllib.error.URLError as exc:
         print(
@@ -523,7 +527,9 @@ def _fetch_copilot_models(token_file: str) -> list[str]:
         )
         return []
     except (OSError, json.JSONDecodeError, ValueError) as exc:
-        print(f"[generator] WARNING: could not fetch Copilot models ({exc}); skipping named entries")
+        print(
+            f"[generator] WARNING: could not fetch Copilot models ({exc}); skipping named entries"
+        )
         return []
 
 
@@ -605,7 +611,8 @@ def cmd_generate_config(tmp_dir: str, output_file: str, copilot_token_file: str)
 
             if referenced_ids:
                 has_active_or_unknown = any(
-                    foundation_status_by_model.get(mid, "") in ("", "ACTIVE") for mid in referenced_ids
+                    foundation_status_by_model.get(mid, "") in ("", "ACTIVE")
+                    for mid in referenced_ids
                 )
                 if not has_active_or_unknown:
                     continue
