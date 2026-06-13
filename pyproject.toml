@@ -1,0 +1,23 @@
+[project]
+name = "headroom-proxy-dev"
+version = "0.1.0"
+description = "Dev tooling for the headroom-proxy repo (linting, type checking)"
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "ty>=0.0.49",
+    "ruff>=0.15.17",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.ty.environment]
+python-version = "3.11"

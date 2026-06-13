@@ -7,6 +7,7 @@ GATEWAY="http://127.0.0.1:4000"
 LITELLM_ADMIN="http://127.0.0.1:4001"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AWS_REGION_NAME="eu-central-1"
+COMBINED_STATS_PY="$DIR/scripts/combined_stats.py"
 
 curl_with_retries() {
   local url="$1"
@@ -138,6 +139,43 @@ for m in sorted(bedrock)[:12]: print(f'    {m}')
   fi
 else
   echo "  Could not fetch model list from LiteLLM backend"
+fi
+echo
+
+# --- Unified stats across :4000 + :4002 ---
+echo "[ Unified Stats ]"
+if [[ -f "$COMBINED_STATS_PY" ]]; then
+  COMBINED_JSON=$(python3 "$COMBINED_STATS_PY" 2>/dev/null || true)
+  if [[ -n "$COMBINED_JSON" ]]; then
+    echo "$COMBINED_JSON" | python3 -c "
+import json,sys
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    print('  Status: unavailable (parse error)')
+    raise SystemExit(0)
+if not d.get('ok'):
+    print(f\"  Status: unavailable ({d.get('error','unknown')}: {d.get('details','')})\")
+    raise SystemExit(0)
+u=d.get('unified',{})
+lanes=d.get('lanes',{})
+b=lanes.get('bedrock_native',{})
+print('  Status: available')
+print(f\"  Unified API requests:    {u.get('api_requests', 0)}\")
+print(f\"  Unified tokens saved:    {u.get('tokens_saved', 0)}\")
+print(f\"  Unified cached requests: {u.get('requests_cached', 0)}\")
+if not b.get('available', False):
+    print(f\"  Bedrock native stats: unavailable ({b.get('error','unknown')})\")
+else:
+    raw_b = (d.get('raw') or {}).get('bedrock_native') or {}
+    src = 'prometheus metrics' if isinstance(raw_b, dict) and raw_b.get('source') == 'prometheus' else 'runtime patch'
+    print(f\"  Bedrock native requests: {b.get('api_requests', 0)} (source: {src})\")
+" 2>/dev/null || echo "  Status: unavailable"
+  else
+    echo "  Status: unavailable"
+  fi
+else
+  echo "  Status: unavailable (missing scripts/combined_stats.py)"
 fi
 echo
 

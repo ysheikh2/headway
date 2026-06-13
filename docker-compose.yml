@@ -47,6 +47,9 @@ services:
       - "127.0.0.1:4000:8787"
     environment:
       - HEADROOM_TELEMETRY=off
+      - HEADROOM_BEDROCK_STATS_URL=http://headroom-bedrock:8787/stats
+      - HEADROOM_BEDROCK_METRICS_URL=http://headroom-bedrock:8787/metrics
+    entrypoint: ["python", "-m", "headroom.cli", "proxy"]
     command:
       - "--host"
       - "0.0.0.0"
@@ -68,6 +71,9 @@ services:
       start_period: 30s
     volumes:
       - ./.data/headroom:/root/.headroom
+      - ./scripts/headroom_patch/headroom_patch:/usr/local/lib/python3.13/site-packages/headroom_patch:ro
+      - ./scripts/headroom_patch/usercustomize.py:/usr/local/lib/python3.13/site-packages/usercustomize.py:ro
+      - ./scripts/headroom_patch/dashboard.html:/usr/local/lib/python3.13/site-packages/headroom/dashboard/templates/dashboard.html:ro
 
   headroom-bedrock:
     image: ${HEADROOM_BEDROCK_IMAGE:-ghcr.io/ysheikh2/headroom-proxy:bedrock-native}

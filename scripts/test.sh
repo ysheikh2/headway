@@ -15,6 +15,7 @@ set -euo pipefail
 GATEWAY="http://127.0.0.1:4000"
 LITELLM_ADMIN="http://127.0.0.1:4001"
 BEDROCK_NATIVE_GATEWAY="http://127.0.0.1:4002"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PASS=0
 FAIL=0
 
@@ -80,8 +81,8 @@ response_first_content() {
 }
 
 resolve_bedrock_native_model() {
-  # Finds the first bedrock-* alias in litellm_config.yaml that maps to eu-central-1
-  # and returns "MODEL_ID REGION". Falls back to the provided alias's model+region.
+  # Resolves a bedrock-* alias from litellm_config.yaml to native model id.
+  # Returns "MODEL_ID REGION".
   local preferred_alias="$1"
   python3 - "$preferred_alias" <<'PY' 2>/dev/null || true
 import sys, re
@@ -401,23 +402,10 @@ elif ! bedrock_native_routes_available "$BEDROCK_NATIVE_GATEWAY"; then
 else
   RESOLVED=$(resolve_bedrock_native_model "$BEDROCK_TEST_MODEL")
   BEDROCK_NATIVE_MODEL=$(echo "$RESOLVED" | awk '{print $1}')
-  BEDROCK_NATIVE_REGION=$(echo "$RESOLVED" | awk '{print $2}')
-  BEDROCK_NATIVE_REGION="${BEDROCK_NATIVE_REGION:-eu-central-1}"
   if [[ -z "$BEDROCK_NATIVE_MODEL" ]]; then
     fail "Could not resolve native model id from alias: $BEDROCK_TEST_MODEL"
     info "Fix: regenerate litellm_config.yaml via ./scripts/start.sh"
   else
-    # If the model's region differs from the proxy's configured region, restart the proxy
-    # with the correct region so SigV4 targets the right Bedrock endpoint.
-    CURRENT_PROXY_REGION=$(docker inspect headroom-bedrock-gateway \
-      --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null |
-      grep 'HEADROOM_PROXY_BEDROCK_REGION=' | cut -d= -f2 || echo "eu-central-1")
-    if [[ "$BEDROCK_NATIVE_REGION" != "$CURRENT_PROXY_REGION" ]]; then
-      info "Model region ($BEDROCK_NATIVE_REGION) differs from proxy region ($CURRENT_PROXY_REGION); restarting proxy..."
-      AWS_REGION="$BEDROCK_NATIVE_REGION" docker compose up -d headroom-bedrock >/dev/null 2>&1
-      sleep 4
-    fi
-
     TMPFILE=$(make_tmp)
     run_bedrock_converse "$BEDROCK_NATIVE_GATEWAY" "$BEDROCK_NATIVE_MODEL" "Reply with the single word: BEDROCKNATIVEOK" "$TMPFILE"
     if [[ "$HTTP_CODE" == "200" ]]; then
@@ -434,11 +422,11 @@ elif 'output' in d:
         if isinstance(b,dict) and 'text' in b:
             print(b['text'].strip()); break
 " 2>/dev/null || echo "")
-      ok "Bedrock :4002 converse passed (HTTP $HTTP_CODE, model: $BEDROCK_NATIVE_MODEL, region: $BEDROCK_NATIVE_REGION, text: \"${CONTENT:-<empty>}\")"
+      ok "Bedrock :4002 converse passed (HTTP $HTTP_CODE, model: $BEDROCK_NATIVE_MODEL, region: ${AWS_REGION:-eu-central-1}, text: \"${CONTENT:-<empty>}\")"
     else
       ERR=$(python3 -c "import json; d=json.load(open('$TMPFILE')); print(str(d)[:220])" 2>/dev/null || head -c 220 "$TMPFILE")
       fail "Bedrock :4002 converse failed (HTTP $HTTP_CODE): $ERR"
-      info "Check native route wiring/image: docker logs headroom-bedrock-gateway"
+      info "Check logs: docker logs headroom-bedrock-gateway"
     fi
 
     TMPFILE=$(make_tmp)
@@ -446,12 +434,34 @@ elif 'output' in d:
     # converse-stream uses EventStream passthrough — check for raw binary response bytes
     STREAM_BYTES=$(wc -c <"$TMPFILE" 2>/dev/null | tr -d ' ')
     if [[ "$HTTP_CODE" == "200" ]] && [[ "${STREAM_BYTES:-0}" -gt 0 ]]; then
-      ok "Bedrock :4002 converse-stream passed (HTTP $HTTP_CODE, EventStream bytes: $STREAM_BYTES, model: $BEDROCK_NATIVE_MODEL, region: $BEDROCK_NATIVE_REGION)"
+      ok "Bedrock :4002 converse-stream passed (HTTP $HTTP_CODE, EventStream bytes: $STREAM_BYTES, model: $BEDROCK_NATIVE_MODEL, region: ${AWS_REGION:-eu-central-1})"
     else
       ERR=$(python3 -c "import json; d=json.load(open('$TMPFILE')); print(str(d)[:220])" 2>/dev/null || head -c 220 "$TMPFILE")
       fail "Bedrock :4002 converse-stream failed (HTTP $HTTP_CODE, bytes: ${STREAM_BYTES:-0}): $ERR"
-      info "Check headroom-bedrock logs: docker logs headroom-bedrock-gateway"
+      info "Check logs: docker logs headroom-bedrock-gateway"
     fi
+  fi
+fi
+
+echo
+
+# --- Test 5c: Unified stats aggregation script ---
+echo "[ Test 5c: Unified stats aggregation (:4000 + :4002) ]"
+COMBINED_JSON=$(python3 "$DIR/scripts/combined_stats.py" 2>/dev/null || true)
+if [[ -z "$COMBINED_JSON" ]]; then
+  fail "Unified stats script returned no output"
+  info "Fix: ensure scripts/combined_stats.py is present and Python can run it"
+else
+  if echo "$COMBINED_JSON" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+sys.exit(0 if d.get("ok") else 1)
+' 2>/dev/null; then
+    U_REQ=$(echo "$COMBINED_JSON" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("unified",{}).get("api_requests",0))' 2>/dev/null || echo "?")
+    ok "Unified stats available (api_requests: $U_REQ)"
+  else
+    ERR=$(echo "$COMBINED_JSON" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(f"{d.get("error","unknown")}: {d.get("details","")}")' 2>/dev/null || echo "unknown error")
+    fail "Unified stats unavailable: $ERR"
   fi
 fi
 echo

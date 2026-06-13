@@ -76,9 +76,7 @@ def lifecycle_rank(status: str) -> int:
 def pick_better(existing, candidate):
     if existing is None:
         return candidate
-    return (
-        candidate if region_rank(candidate[2]) < region_rank(existing[2]) else existing
-    )
+    return candidate if region_rank(candidate[2]) < region_rank(existing[2]) else existing
 
 
 # ---------------------------------------------------------------------------
@@ -154,17 +152,14 @@ for name in sorted(os.listdir(tmp_dir)):
 
         referenced_ids = []
         for model_ref in summary.get("models", []):
-            model_arn = (
-                model_ref.get("modelArn") if isinstance(model_ref, dict) else None
-            )
+            model_arn = model_ref.get("modelArn") if isinstance(model_ref, dict) else None
             mid = extract_model_id_from_arn(model_arn or "")
             if mid:
                 referenced_ids.append(mid)
 
         if referenced_ids:
             has_active_or_unknown = any(
-                foundation_status_by_model.get(mid, "") in ("", "ACTIVE")
-                for mid in referenced_ids
+                foundation_status_by_model.get(mid, "") in ("", "ACTIVE") for mid in referenced_ids
             )
             if not has_active_or_unknown:
                 continue
@@ -215,12 +210,11 @@ def fetch_copilot_models(token_file: str) -> list[str]:
         with open(token_file) as fh:
             key_data = json.load(fh)
         token = key_data.get("token") or key_data.get("api_key")
-        if not token:
-            if isinstance(key_data, dict):
-                for value in key_data.values():
-                    if isinstance(value, str) and value.strip():
-                        token = value.strip()
-                        break
+        if not token and isinstance(key_data, dict):
+            for value in key_data.values():
+                if isinstance(value, str) and value.strip():
+                    token = value.strip()
+                    break
         if not token:
             print(
                 f"[generator] WARNING: no usable token in {token_file}; skipping named Copilot entries"
@@ -301,14 +295,10 @@ for alias, model, region in entries:
 for model_id in copilot_models:
     alias = "copilot-" + re.sub(r"[^a-z0-9]+", "-", model_id.lower()).strip("-")
     lines.append(
-        f"  - model_name: {alias}\n"
-        f"    litellm_params:\n"
-        f"      model: github_copilot/{model_id}\n"
+        f"  - model_name: {alias}\n    litellm_params:\n      model: github_copilot/{model_id}\n"
     )
 
-lines.append(
-    '\n  - model_name: "*"\n    litellm_params:\n      model: "github_copilot/*"\n'
-)
+lines.append('\n  - model_name: "*"\n    litellm_params:\n      model: "github_copilot/*"\n')
 
 lines.append("\nlitellm_settings:\n  drop_params: true\n  set_verbose: false\n")
 
