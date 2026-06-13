@@ -92,6 +92,8 @@ jobs:
           file: Dockerfile.bedrock-native
           platforms: linux/amd64,linux/arm64
           push: true
+          cache-from: type=gha,scope=bedrock-native
+          cache-to: type=gha,mode=max,scope=bedrock-native
           build-args: |
             HEADROOM_GIT_REPO=${{ steps.source.outputs.repo }}
             HEADROOM_GIT_REF=${{ steps.source.outputs.ref }}
