@@ -36,6 +36,7 @@ jobs:
           filters: |
             shell:
               - '**/*.sh'
+              - 'headroom-proxy'
             python:
               - '**/*.py'
             yaml:
@@ -64,6 +65,9 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t files < <(git ls-files '*.sh')
+          if [ -f headroom-proxy ]; then
+            files+=(headroom-proxy)
+          fi
           if [ "${#files[@]}" -gt 0 ]; then
             bash -n "${files[@]}"
           fi
@@ -72,6 +76,9 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t files < <(git ls-files '*.sh')
+          if [ -f headroom-proxy ]; then
+            files+=(headroom-proxy)
+          fi
           if [ "${#files[@]}" -gt 0 ]; then
             shfmt -d -i 2 -ci "${files[@]}"
           fi
@@ -222,6 +229,9 @@ jobs:
 
           if [ "${{ needs.detect-changes.outputs.shell }}" == "true" ] && [ "${{ needs.shell-checks.result }}" == "failure" ]; then
             mapfile -t sh_files < <(git ls-files '*.sh')
+            if [ -f headroom-proxy ]; then
+              sh_files+=(headroom-proxy)
+            fi
             if [ "${#sh_files[@]}" -gt 0 ]; then
               shfmt -w -i 2 -ci "${sh_files[@]}"
             fi

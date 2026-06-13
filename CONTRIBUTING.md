@@ -4,19 +4,20 @@ Thanks for helping improve this gateway.
 
 ## Local workflow
 
-1. Run one-shot bootstrap:
+1. Bootstrap and start the gateway:
 
 ```bash
-./scripts/oneshot.sh
+./headroom-proxy init
+./headroom-proxy up
 ```
 
 2. Make your changes.
 3. Re-run validation:
 
 ```bash
-./scripts/secret-scan.sh
-./scripts/test.sh
-./scripts/status.sh
+./headroom-proxy secret-scan
+./headroom-proxy test
+./headroom-proxy doctor
 ```
 
 ## Expectations

@@ -13,7 +13,7 @@ This repo runs a local gateway for Kilo so both providers work through one endpo
 Kilo endpoints:
 
 - GitHub Copilot: `http://127.0.0.1:4000/v1`
-- AWS Bedrock: `http://127.0.0.1:4002/v1`
+- AWS Bedrock: `http://127.0.0.1:4002`
 
 ## Live Architecture
 
@@ -33,7 +33,7 @@ Kilo endpoints:
 - Role: upstream provider router (Bedrock + GitHub Copilot)
 
 3. `headroom-bedrock-gateway`
-- Image: `${HEADROOM_BEDROCK_IMAGE:-ghcr.io/ysheikh2/headroom-proxy:bedrock-native}` — Rust binary built from `chopratejas/headroom` via `.github/workflows/docker-bedrock-native.yml`
+- Image: `${HEADROOM_BEDROCK_IMAGE:-ghcr.io/ysheikh2/headroom-proxy:bedrock-native}`
 - Port: `127.0.0.1:4002` (container `:8787`)
 - Upstream: AWS Bedrock Runtime (native Bedrock routes)
 - Auth: AWS profile chain (`BEDROCK_AWS_PROFILE`, mounted `~/.aws`)
@@ -51,42 +51,27 @@ Request flow:
   - native Bedrock routes (`/model/{id}/converse`, `/model/{id}/converse-stream`)
   - Headroom signs and forwards requests directly to AWS
 
-Important semantics:
-
-- Copilot lane uses published `ghcr.io/chopratejas/headroom:code`.
-- Bedrock lane uses `ghcr.io/ysheikh2/headroom-proxy:bedrock-native`, a Rust binary built from `chopratejas/headroom` main (includes PR #917 converse-stream support).
-- Named `copilot-*` entries are generated dynamically by `generate-litellm-config.sh`.
-- The wildcard catches any Copilot model not explicitly listed.
-
 Practical effect:
 
-- Copilot requests: compressed by Headroom `:4000` → routed via LiteLLM.
-- Bedrock requests: compressed by Headroom `:4002` → routed directly to AWS Bedrock.
+- Copilot requests: compressed by Headroom `:4000` -> routed via LiteLLM.
+- Bedrock requests: compressed by Headroom `:4002` -> routed directly to AWS Bedrock.
 
 ## Key Architecture Rule
 
-**Default:** do not build custom Docker images or modify the headroom source repo.
+Default: do not build custom Docker images or modify the headroom source repo.
 
 The Bedrock lane (`headroom-bedrock-gateway`) uses a Rust binary built from
 `chopratejas/headroom` via `.github/workflows/docker-bedrock-native.yml` and
-pushed to `ghcr.io/ysheikh2/headroom-proxy:bedrock-native`. This is necessary
-because the upstream Python image (`ghcr.io/chopratejas/headroom:code`) does not
-expose native Bedrock routes — those are in the Rust proxy crate.
-
-## Why Bedrock Uses Native Routes on :4002
-
-Kilo's `amazon-bedrock` provider sends Bedrock-native requests (including
-`/model/{id}/converse-stream`). The `:4002` lane now targets native Bedrock
-route compatibility directly in Headroom.
+published to `ghcr.io/ysheikh2/headroom-proxy:bedrock-native`.
 
 ## Provider/Auth Behavior
 
 ### GitHub Copilot
 
 - Do not rely on old model names (for example `gpt-4o` may not be available).
-- Use currently available Copilot models; tests should prefer low-cost models (for example `claude-haiku-4.5`) with fallback.
+- Use currently available Copilot models.
 - 403 errors usually mean token refresh is needed.
-- LiteLLM GitHub Copilot provider requires device-flow login on first use. Tokens persist under `.data/litellm` on the host (mounted to `/root/.config/litellm` in the container).
+- LiteLLM GitHub Copilot provider requires device-flow login on first use. Tokens persist under `.data/litellm` on the host.
 
 ### AWS Bedrock
 
@@ -97,20 +82,13 @@ route compatibility directly in Headroom.
 
 ## Files That Matter
 
+- `headroom-proxy` - single CLI for stack lifecycle, auth, config, diagnostics, reset
 - `docker-compose.yml` - all runtime wiring
 - `litellm_config.yaml` - auto-generated model aliases and route policy
-- `scripts/generate-litellm-config.sh` - discovers Bedrock models in EU regions and writes `litellm_config.yaml` (one alias per model, ACTIVE-only)
-- `scripts/start.sh` - refresh auth, pull images, start stack
-- `scripts/update.sh` - pull latest images and restart in-place (for keeping up with headroom releases)
-- `scripts/stop.sh` - stop the running stack (preserves volumes and tokens)
-- `scripts/auth-fix.sh` - refresh AWS auth and restart (prints Copilot device-code hints if pending)
-- `scripts/setup-kilo.sh` - enforce Kilo provider baseURLs for this gateway
-- `scripts/oneshot.sh` - one-command bootstrap for new users (setup, start, test, status)
+- `scripts/generate-litellm-config.sh` - internal helper invoked by CLI for Bedrock model discovery + `litellm_config.yaml` generation
+- `scripts/test.sh` - full end-to-end smoke tests (Copilot + Bedrock)
 - `scripts/secret-scan.sh` - lightweight local secret scan before publish
-- `scripts/uninstall.sh` - stop/remove stack with optional deep cleanup
-- `scripts/status.sh` - health, models, config, AWS status, headroom stats
-- `scripts/test.sh` - end-to-end smoke tests (Copilot + Bedrock)
-- `scripts/stats.sh` - concise savings/cost/cache/latency report
+- `scripts/headroom_python.py` - shared Python helper module (config generation, env/kilo helpers, unified stats)
 - `~/.config/kilo/kilo.jsonc` - Kilo provider baseURL settings
 
 ## Required Kilo Config
@@ -123,65 +101,77 @@ route compatibility directly in Headroom.
 
 ## Standard Operations
 
-### Start everything
+### First-time setup
 
 ```bash
-./scripts/start.sh
+./headroom-proxy init
 ```
 
-### Update to latest headroom/LiteLLM images
+### Start stack
 
 ```bash
-./scripts/update.sh
+./headroom-proxy up
 ```
 
-### Stop the stack
+### Update images + restart
 
 ```bash
-./scripts/stop.sh
+./headroom-proxy update
 ```
 
-### Fix auth issues (Copilot 403, Bedrock auth failure)
+### Stop stack
 
 ```bash
-./scripts/auth-fix.sh
+./headroom-proxy down
 ```
 
-### Status snapshot
+### Fix auth (no config regeneration)
 
 ```bash
-./scripts/status.sh
+./headroom-proxy auth
+```
+
+### Diagnostics snapshot
+
+```bash
+./headroom-proxy doctor
 ```
 
 ### End-to-end verification
 
 ```bash
-./scripts/test.sh
-```
-
-### One-shot bootstrap for new users
-
-```bash
-./scripts/oneshot.sh
+./headroom-proxy test
 ```
 
 ### Savings and cache report
 
 ```bash
-./scripts/stats.sh
+./headroom-proxy stats
+```
+
+### Regenerate Bedrock model config explicitly
+
+```bash
+./headroom-proxy config regen
+```
+
+### Enforce Kilo base URLs
+
+```bash
+./headroom-proxy config kilo
 ```
 
 ### Secret scan before publish
 
 ```bash
-./scripts/secret-scan.sh
+./headroom-proxy secret-scan
 ```
 
 ### Uninstall and cleanup
 
 ```bash
-./scripts/uninstall.sh
-./scripts/uninstall.sh --yes --purge-data --cleanup-kilo
+./headroom-proxy reset --yes
+./headroom-proxy reset --yes --purge-data --prune-images --cleanup-kilo
 ```
 
 ## Diagnostics
@@ -206,30 +196,15 @@ curl -sS http://127.0.0.1:4000/v1/models
 
 Should include:
 
-- `bedrock-*` aliases (for example `bedrock-claude-sonnet-4`)
-- `copilot-*` named aliases (auto-discovered from your Copilot account)
-- `*` wildcard fallback for any other Copilot model
+- `bedrock-*` aliases
+- `copilot-*` named aliases (if available)
+- `*` wildcard fallback
 
 ### Check Bedrock native gateway
 
 ```bash
 curl -sS http://127.0.0.1:4002/healthz
 ```
-
-Route probe (any non-404 means routes are mounted):
-
-```bash
-curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:4002/model/probe/converse -H "Content-Type: application/json" -d '{}'
-```
-
-### Check Headroom health/stats (Copilot path)
-
-```bash
-curl -sS http://127.0.0.1:4000/livez
-curl -sS http://127.0.0.1:4000/stats
-```
-
-`summary.api_requests` should increment when Copilot calls are routed through gateway.
 
 ### Check AWS SSO profile
 
@@ -247,37 +222,29 @@ aws sso login --profile "$BEDROCK_AWS_PROFILE"
 
 1. Copilot 403 unauthorized
 - Cause: stale/revoked GitHub OAuth token
-- Fix: `./scripts/auth-fix.sh`
+- Fix: `./headroom-proxy auth`
 
 2. Bedrock invalid model identifier
-- Cause: wrong/stale model/inference profile ID
-- Fix: regenerate config from AWS and restart:
-  - `./scripts/generate-litellm-config.sh --aws-profile "$AWS_PROFILE"`
-  - `docker compose up -d`
+- Cause: wrong/stale model or profile ID
+- Fix:
+  - `./headroom-proxy config regen`
+  - `./headroom-proxy up`
 
-3. Bedrock auth failure (native lane `:4002`)
-- Cause: expired AWS SSO session for profile in `BEDROCK_AWS_PROFILE`
+3. Bedrock auth failure
+- Cause: expired AWS SSO session (`BEDROCK_AWS_PROFILE`)
 - Fix:
   - `aws sso login --profile "$BEDROCK_AWS_PROFILE"`
-  - `./scripts/auth-fix.sh`
+  - `./headroom-proxy auth`
 
-4. Bedrock auth failure (LiteLLM alias lane `:4001`)
-- Cause: expired AWS SSO session for profile in `AWS_PROFILE`
-- Fix:
-  - `aws sso login --profile "$AWS_PROFILE"`
-  - `./scripts/auth-fix.sh`
+4. LiteLLM healthy endpoint works but Docker health says unhealthy
+- Cause: healthcheck mismatch
+- Fix: keep compose healthchecks aligned with runtime
 
-5. LiteLLM healthy endpoint works but Docker health says unhealthy
-- Cause: bad healthcheck command for image runtime
-- Fix: keep compose healthcheck using Python (not curl dependency)
-
-6. Copilot intermittent 502 from gateway
+5. Copilot intermittent 502 from gateway
 - Cause: transient upstream/proxy errors
-- Fix: retry logic in `scripts/test.sh`; for runtime, re-run `./scripts/auth-fix.sh` if persistent
+- Fix: retry; if persistent, run `./headroom-proxy auth`
 
 ## Model Maintenance Workflow
-
-When models change (common for Copilot and Bedrock):
 
 1. List currently available Bedrock models:
 
@@ -289,34 +256,25 @@ aws bedrock list-inference-profiles --profile "$AWS_PROFILE" --region eu-central
 2. Regenerate `litellm_config.yaml`:
 
 ```bash
-./scripts/generate-litellm-config.sh --aws-profile "$AWS_PROFILE"
+./headroom-proxy config regen
 ```
 
 3. Restart stack:
 
 ```bash
-docker compose up -d
+./headroom-proxy up
 ```
 
 4. Validate:
 
 ```bash
-./scripts/test.sh
+./headroom-proxy test
 ```
-
-## External References Used for This Setup
-
-These informed this runbook and should be preferred references:
-
-- LiteLLM Bedrock provider docs
-- LiteLLM GitHub Copilot provider docs
-- LiteLLM GitHub Copilot integration tutorial
-- Bedrock setup notes from mrkaran.dev
 
 ## Agent Rules for This Repo
 
 1. Keep runtime behavior in `docker-compose.yml` unless there is a strong reason not to.
 2. Prefer alias-based Bedrock model mapping in `litellm_config.yaml`.
 3. Do not assume old model names remain valid.
-4. After changing routing/auth/model config, always run `./scripts/test.sh`.
+4. After changing routing/auth/model config, always run `./headroom-proxy test`.
 5. When debugging provider failures, test Copilot and Bedrock independently via gateway before changing Kilo config.
