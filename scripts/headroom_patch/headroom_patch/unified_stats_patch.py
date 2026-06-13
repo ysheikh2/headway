@@ -105,9 +105,7 @@ def _parse_prometheus_metrics(text: str) -> dict[str, int]:
 
 def _build_bedrock_stats() -> _BedrockStats:
     stats_url = os.getenv("HEADROOM_BEDROCK_STATS_URL", "http://headroom-bedrock:8787/stats")
-    metrics_url = os.getenv(
-        "HEADROOM_BEDROCK_METRICS_URL", "http://headroom-bedrock:8787/metrics"
-    )
+    metrics_url = os.getenv("HEADROOM_BEDROCK_METRICS_URL", "http://headroom-bedrock:8787/metrics")
     timeout = float(os.getenv("HEADROOM_UNIFIED_FETCH_TIMEOUT_SECONDS", "2.5"))
 
     body, err = _fetch_json(stats_url, timeout)

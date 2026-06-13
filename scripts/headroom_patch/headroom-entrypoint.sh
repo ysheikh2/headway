@@ -15,7 +15,7 @@ if [ -d "$PATCH_SRC" ]; then
 fi
 
 # Write a usercustomize.py into site-packages (loads after site.py, after packages).
-cat > "${SITE_PACKAGES}/usercustomize.py" <<'PYEOF'
+cat >"${SITE_PACKAGES}/usercustomize.py" <<'PYEOF'
 try:
     from headroom_patch import unified_stats_patch
     unified_stats_patch.apply_patch()

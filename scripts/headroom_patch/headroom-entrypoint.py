@@ -7,6 +7,7 @@ the normal headroom proxy CLI as if this script doesn't exist.
 Mounted into the headroom container at /opt/headroom-patch/ via compose volumes.
 Compose entrypoint: ["python", "/opt/headroom-patch/headroom-entrypoint.py"]
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -22,6 +23,7 @@ def _find_site_packages() -> pathlib.Path | None:
     # Derive from headroom's own __file__ — guaranteed to be the right dir.
     try:
         import headroom as _hr  # ty: ignore[unresolved-import]
+
         return pathlib.Path(_hr.__file__).parent.parent
     except Exception:
         pass

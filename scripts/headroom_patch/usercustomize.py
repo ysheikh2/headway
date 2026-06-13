@@ -3,6 +3,7 @@
 Applies the unified Bedrock+Copilot stats patch to the headroom proxy
 before the app starts serving requests.
 """
+
 try:
     from headroom_patch import unified_stats_patch
 

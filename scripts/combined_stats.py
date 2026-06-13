@@ -158,7 +158,9 @@ def main() -> int:
             "error": bedrock_err,
             "api_requests": _int_num(bedrock or {}, "summary", "api_requests"),
             "tokens_saved": _int_num(bedrock or {}, "tokens", "saved"),
-            "compression_tokens_saved": _int_num(bedrock or {}, "tokens", "proxy_compression_saved"),
+            "compression_tokens_saved": _int_num(
+                bedrock or {}, "tokens", "proxy_compression_saved"
+            ),
             "requests_cached": _int_num(bedrock or {}, "requests", "cached"),
             "requests_failed": _int_num(bedrock or {}, "requests", "failed"),
         },
@@ -169,8 +171,10 @@ def main() -> int:
         "tokens_saved": lanes["copilot"]["tokens_saved"] + lanes["bedrock_native"]["tokens_saved"],
         "compression_tokens_saved": lanes["copilot"]["compression_tokens_saved"]
         + lanes["bedrock_native"]["compression_tokens_saved"],
-        "requests_cached": lanes["copilot"]["requests_cached"] + lanes["bedrock_native"]["requests_cached"],
-        "requests_failed": lanes["copilot"]["requests_failed"] + lanes["bedrock_native"]["requests_failed"],
+        "requests_cached": lanes["copilot"]["requests_cached"]
+        + lanes["bedrock_native"]["requests_cached"],
+        "requests_failed": lanes["copilot"]["requests_failed"]
+        + lanes["bedrock_native"]["requests_failed"],
     }
 
     out = {
