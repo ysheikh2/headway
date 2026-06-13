@@ -314,9 +314,6 @@ model_list:
     litellm_params:
       model: bedrock/zai.glm-5
       aws_region_name: eu-west-2
-  - model_name: copilot-claude-fable-5
-    litellm_params:
-      model: github_copilot/claude-fable-5
   - model_name: copilot-claude-opus-4-6
     litellm_params:
       model: github_copilot/claude-opus-4.6

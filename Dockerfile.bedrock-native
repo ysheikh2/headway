@@ -5,6 +5,8 @@ ARG HEADROOM_GIT_REF=053a5b94ded45309c144577c92982562d4f97843
 
 WORKDIR /src
 
+COPY scripts/docker/patch_headroom_upstream.py /usr/local/bin/patch_headroom_upstream.py
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
@@ -14,6 +16,8 @@ RUN git clone --filter=blob:none "https://github.com/${HEADROOM_GIT_REPO}.git" h
 WORKDIR /src/headroom
 
 RUN git checkout "${HEADROOM_GIT_REF}"
+
+RUN python3 /usr/local/bin/patch_headroom_upstream.py /src/headroom
 
 RUN cargo build --release -p headroom-proxy
 

@@ -215,12 +215,11 @@ def fetch_copilot_models(token_file: str) -> list[str]:
         with open(token_file) as fh:
             key_data = json.load(fh)
         token = key_data.get("token") or key_data.get("api_key")
-        if not token:
-            if isinstance(key_data, dict):
-                for value in key_data.values():
-                    if isinstance(value, str) and value.strip():
-                        token = value.strip()
-                        break
+        if not token and isinstance(key_data, dict):
+            for value in key_data.values():
+                if isinstance(value, str) and value.strip():
+                    token = value.strip()
+                    break
         if not token:
             print(
                 f"[generator] WARNING: no usable token in {token_file}; skipping named Copilot entries"

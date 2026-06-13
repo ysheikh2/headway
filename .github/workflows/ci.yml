@@ -96,7 +96,9 @@ jobs:
         uses: astral-sh/setup-uv@v8.2.0
         with:
           enable-cache: true
-          cache-dependency-glob: .github/workflows/ci.yml
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
 
       - name: Check Python formatting and lint (all tracked .py)
         run: |
@@ -112,7 +114,7 @@ jobs:
           set -euo pipefail
           mapfile -t files < <(git ls-files '*.py')
           if [ "${#files[@]}" -gt 0 ]; then
-            uvx ty check "${files[@]}"
+            uvx ty check --error-on-warning "${files[@]}"
           fi
 
       - name: Python compile check
@@ -143,7 +145,9 @@ jobs:
         uses: astral-sh/setup-uv@v8.2.0
         with:
           enable-cache: true
-          cache-dependency-glob: .github/workflows/ci.yml
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
 
       - name: YAML validation (all tracked .yml/.yaml)
         run: |
@@ -204,7 +208,9 @@ jobs:
         uses: astral-sh/setup-uv@v8.2.0
         with:
           enable-cache: true
-          cache-dependency-glob: .github/workflows/ci.yml
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
 
       - name: Shell formatting (shfmt)
         if: needs.detect-changes.outputs.shell == 'true' && needs.shell-checks.result == 'failure'

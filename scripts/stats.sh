@@ -7,7 +7,9 @@
 set -euo pipefail
 
 GATEWAY="http://127.0.0.1:4000"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+RAW_COMBINED=$(python3 "$DIR/scripts/combined_stats.py" 2>/dev/null || true)
 RAW_STATS=$(curl -sS --max-time 8 "$GATEWAY/stats" 2>/dev/null || true)
 RAW_HISTORY=$(curl -sS --max-time 8 "$GATEWAY/stats-history" 2>/dev/null || true)
 
@@ -17,12 +19,13 @@ if [[ -z "$RAW_STATS" ]]; then
   exit 1
 fi
 
-python3 - "$RAW_STATS" "$RAW_HISTORY" <<'PY'
+python3 - "$RAW_STATS" "$RAW_HISTORY" "$RAW_COMBINED" <<'PY'
 import json
 import sys
 
 stats = json.loads(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1] else {}
 hist = json.loads(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2] else {}
+combined = json.loads(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3] else {}
 
 summary = stats.get("summary", {})
 compression = summary.get("compression", {})
@@ -38,6 +41,25 @@ display = hist.get("display_session", {}) if isinstance(hist, dict) else {}
 
 print("=== Headroom Savings Report ===")
 print()
+if isinstance(combined, dict) and combined.get("ok"):
+    u = combined.get("unified", {})
+    lanes = combined.get("lanes", {})
+    print("[ Unified Lanes (:4000 Copilot + :4002 Bedrock) ]")
+    print(f"  Unified API requests:       {u.get('api_requests', 0)}")
+    print(f"  Unified tokens saved:       {u.get('tokens_saved', 0)}")
+    print(f"  Unified compression saved:  {u.get('compression_tokens_saved', 0)}")
+    print(f"  Unified cached requests:    {u.get('requests_cached', 0)}")
+    c = lanes.get("copilot", {}) if isinstance(lanes, dict) else {}
+    b = lanes.get("bedrock_native", {}) if isinstance(lanes, dict) else {}
+    print(f"  Copilot lane requests:      {c.get('api_requests', 0)}")
+    if b.get("available", False):
+        raw_b = (combined.get("raw") or {}).get("bedrock_native") or {}
+        src = "prometheus" if isinstance(raw_b, dict) and raw_b.get("source") == "prometheus" else "runtime patch"
+        print(f"  Bedrock native requests:    {b.get('api_requests', 0)} (source: {src})")
+    else:
+        print(f"  Bedrock native stats: unavailable ({b.get('error', 'unknown')})")
+    print()
+
 print("[ Totals ]")
 print(f"  API requests: {summary.get('api_requests', 0)}")
 print(f"  Input tokens: {tokens.get('input', 0)}")
