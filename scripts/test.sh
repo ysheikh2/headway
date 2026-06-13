@@ -162,7 +162,8 @@ run_bedrock_converse_stream() {
 bedrock_log_has_for_request() {
   local request_id="$1"
   local marker="$2"
-  docker logs headroom-bedrock-gateway 2>/dev/null | grep -F "$request_id" | grep -F "$marker" >/dev/null 2>&1
+  local tail_lines="${BEDROCK_LOG_TAIL_LINES:-4000}"
+  docker logs --tail "$tail_lines" headroom-bedrock-gateway 2>/dev/null | grep -F "$request_id" | grep -F "$marker" >/dev/null 2>&1
 }
 
 bedrock_native_routes_available() {

@@ -320,6 +320,7 @@ cmd_update() {
 
 cmd_auth() {
   require_cmd aws
+  require_cmd python3
   require_docker
 
   load_env
@@ -352,7 +353,10 @@ cmd_auth() {
 }
 
 cmd_doctor() {
+  require_cmd aws
+  require_cmd curl
   require_cmd python3
+  require_docker
   load_env
 
   echo "=== headroom-proxy doctor ==="
@@ -440,6 +444,8 @@ cmd_config() {
   shift
   case "$sub" in
     regen)
+      require_cmd aws
+      require_cmd python3
       load_env
       ensure_env_defaults ""
       load_env
