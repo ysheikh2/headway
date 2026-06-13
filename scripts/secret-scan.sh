@@ -55,6 +55,10 @@ for dp, dns, fns in os.walk(root):
                     continue
                 if re.fullmatch(r'[A-Z0-9_]{32,}', m):
                     continue
+                # Ignore long ALL_CAPS environment-style toggles (for example
+                # CONVERSE_EXPECT_ANTHROPIC_COMPRESS=0) used in test scripts.
+                if re.fullmatch(r'[A-Z0-9_]{24,}=(0|1|TRUE|FALSE|true|false)', m):
+                    continue
                 uniq=len(set(m))/len(m)
                 if uniq>0.45 and any(c.isdigit() for c in m) and any(c.isalpha() for c in m):
                     results.append(f"{p}:{i}:{m[:70]}")

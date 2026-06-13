@@ -99,7 +99,7 @@ if [[ -z "$COPILOT_TOKEN_FILE" && -f "$DIR/.data/litellm/github_copilot/api-key.
 fi
 
 TMP_OUTPUT_FILE="$TMP_DIR/litellm_config.yaml"
-python3 "$DIR/scripts/_generate_config.py" "$TMP_DIR" "$TMP_OUTPUT_FILE" "${COPILOT_TOKEN_FILE:-}"
+python3 "$DIR/scripts/headroom_python.py" generate-config "$TMP_DIR" "$TMP_OUTPUT_FILE" "${COPILOT_TOKEN_FILE:-}"
 
 BEDROCK_ALIAS_COUNT=$(grep -Ec '^  - model_name: bedrock-' "$TMP_OUTPUT_FILE" || true)
 if [[ "${BEDROCK_ALIAS_COUNT:-0}" -eq 0 ]]; then

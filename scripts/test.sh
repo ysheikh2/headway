@@ -129,11 +129,13 @@ run_bedrock_converse() {
   local model="$2"
   local prompt="$3"
   local outfile="$4"
+  local request_id="$5"
 
   # Bedrock Converse API format: content items need "type"+"text" keys (not just "text").
   HTTP_CODE=$(curl -s -o "$outfile" -w "%{http_code}" --max-time 60 \
     "$base_url/model/$model/converse" \
     -H "Content-Type: application/json" \
+    -H "x-request-id: $request_id" \
     -d "{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"$prompt\"}]}],\"inferenceConfig\":{\"maxTokens\":32}}" \
     2>/dev/null || echo "000")
 }
@@ -143,6 +145,7 @@ run_bedrock_converse_stream() {
   local model="$2"
   local prompt="$3"
   local outfile="$4"
+  local request_id="$5"
 
   # Use EventStream Accept to get raw passthrough bytes — the SSE translator only
   # handles InvokeModel "chunk" events, not Converse stream event types.
@@ -151,8 +154,16 @@ run_bedrock_converse_stream() {
     "$base_url/model/$model/converse-stream" \
     -H "Content-Type: application/json" \
     -H "Accept: application/vnd.amazon.eventstream" \
+    -H "x-request-id: $request_id" \
     -d "{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"$prompt\"}]}],\"inferenceConfig\":{\"maxTokens\":32}}" \
     2>/dev/null || echo "000")
+}
+
+bedrock_log_has_for_request() {
+  local request_id="$1"
+  local marker="$2"
+  local tail_lines="${BEDROCK_LOG_TAIL_LINES:-4000}"
+  docker logs --tail "$tail_lines" headroom-bedrock-gateway 2>/dev/null | grep -F "$request_id" | grep -F "$marker" >/dev/null 2>&1
 }
 
 bedrock_native_routes_available() {
@@ -187,7 +198,7 @@ if [[ -n "$BEDROCK_LIVE" ]]; then
   ok "Bedrock headroom liveness responded: $BEDROCK_LIVE"
 else
   fail "Bedrock headroom liveness unreachable at $BEDROCK_NATIVE_GATEWAY/healthz"
-  info "Fix: ./scripts/start.sh"
+  info "Fix: ./headroom-proxy up"
 fi
 echo
 
@@ -208,7 +219,7 @@ for container in litellm-gateway headroom-gateway; do
     ok "${container} is running: $status"
   else
     fail "Container '${container}' is not running"
-    info "Fix: ./scripts/start.sh"
+    info "Fix: ./headroom-proxy up"
   fi
 done
 echo
@@ -220,7 +231,7 @@ if [[ -n "$LIVE" ]]; then
   ok "Liveness responded: $LIVE"
 else
   fail "Liveness unreachable at $GATEWAY/livez"
-  info "Fix: ./scripts/start.sh"
+  info "Fix: ./headroom-proxy up"
 fi
 echo
 
@@ -242,7 +253,7 @@ echo
 echo "[ Test 4: GitHub Copilot end-to-end (lowest-cost model preferred) ]"
 TMPFILE=$(make_tmp)
 HTTP_CODE="000"
-COPILOT_CANDIDATES=()
+COPILOT_CANDIDATES=""
 
 COPILOT_FROM_MODELS=$(echo "$MODELS" | python3 -c '
 import json,sys,re
@@ -267,14 +278,12 @@ print("\n".join(selected))
 ' 2>/dev/null || echo "")
 
 if [[ -n "$COPILOT_FROM_MODELS" ]]; then
-  while IFS= read -r line; do
-    [[ -n "$line" ]] && COPILOT_CANDIDATES+=("$line")
-  done <<<"$COPILOT_FROM_MODELS"
+  COPILOT_CANDIDATES="$COPILOT_FROM_MODELS"
 fi
 
-# De-duplicate while preserving order (portable with bash 3 + set -u).
-if [[ ${#COPILOT_CANDIDATES[@]} -gt 0 ]]; then
-  COPILOT_DEDUPED=$(printf '%s\n' "${COPILOT_CANDIDATES[@]}" | python3 -c '
+# De-duplicate while preserving order.
+if [[ -n "$COPILOT_CANDIDATES" ]]; then
+  COPILOT_CANDIDATES=$(printf '%s\n' "$COPILOT_CANDIDATES" | python3 -c '
 import sys
 seen=set()
 out=[]
@@ -285,15 +294,12 @@ for line in sys.stdin:
         out.append(x)
 print("\n".join(out))
 ')
-  COPILOT_CANDIDATES=()
-  while IFS= read -r line; do
-    [[ -n "$line" ]] && COPILOT_CANDIDATES+=("$line")
-  done <<<"$COPILOT_DEDUPED"
 fi
 
 COPILOT_TEST_MODEL=""
 
-for CANDIDATE in "${COPILOT_CANDIDATES[@]}"; do
+while IFS= read -r CANDIDATE; do
+  [[ -z "$CANDIDATE" ]] && continue
   COPILOT_TEST_MODEL="$CANDIDATE"
 
   for ATTEMPT in 1 2 3; do
@@ -320,7 +326,7 @@ for CANDIDATE in "${COPILOT_CANDIDATES[@]}"; do
   fi
 
   break
-done
+done <<<"$COPILOT_CANDIDATES"
 
 if [[ "$HTTP_CODE" == "200" ]] && response_has_choices "$TMPFILE"; then
   CONTENT=$(response_first_content "$TMPFILE")
@@ -332,7 +338,7 @@ if [[ "$HTTP_CODE" == "200" ]] && response_has_choices "$TMPFILE"; then
 else
   ERR=$(python3 -c "import json; d=json.load(open('$TMPFILE')); print(str(d)[:200])" 2>/dev/null || head -c 200 "$TMPFILE")
   fail "Copilot request failed (HTTP $HTTP_CODE): $ERR"
-  info "Fix: ./scripts/auth-fix.sh"
+  info "Fix: ./headroom-proxy auth"
   CODE_LINE=$(docker logs litellm-gateway 2>/dev/null | grep -E 'Please visit https://github.com/login/device and enter code' | tail -1 || true)
   if [[ -n "$CODE_LINE" ]]; then
     info "Copilot device auth pending: $CODE_LINE"
@@ -371,9 +377,34 @@ for p in preferred:
 print('')
 " 2>/dev/null || echo "")
 
+BEDROCK_ANTHROPIC_TEST_MODEL=$(echo "$MODELS" | python3 -c "
+import json,sys
+try:
+    data=json.load(sys.stdin).get('data',[])
+except Exception:
+    print('')
+    raise SystemExit(0)
+ids=[m.get('id','') for m in data]
+preferred=[
+  'bedrock-eu-anthropic-claude-haiku-4-5-20251001-v1-0',
+  'bedrock-global-anthropic-claude-haiku-4-5-20251001-v1-0',
+  'bedrock-eu-anthropic-claude-sonnet-4-5-20250929-v1-0',
+  'bedrock-global-anthropic-claude-sonnet-4-5-20250929-v1-0',
+]
+for p in preferred:
+    if p in ids:
+        print(p)
+        raise SystemExit(0)
+for x in ids:
+    if x.startswith('bedrock-') and 'anthropic' in x:
+        print(x)
+        raise SystemExit(0)
+print('')
+" 2>/dev/null || echo "")
+
 if [[ -z "$BEDROCK_TEST_MODEL" ]]; then
   fail "No bedrock-* model aliases found in /v1/models"
-  info "Fix: ./scripts/start.sh (regenerates litellm_config.yaml from AWS Bedrock)"
+  info "Fix: ./headroom-proxy up --regen-config"
   echo
 else
   echo "[ Test 5: AWS Bedrock end-to-end (lowest-cost model preferred: $BEDROCK_TEST_MODEL) ]"
@@ -395,19 +426,37 @@ echo
 echo "[ Test 5b: Bedrock native Converse + ConverseStream via :4002 ]"
 if [[ -z "$BEDROCK_TEST_MODEL" ]]; then
   fail "No bedrock-* model found in :4001 model list — cannot run Test 5b"
-  info "Fix: ./scripts/start.sh"
+  info "Fix: ./headroom-proxy up"
 elif ! bedrock_native_routes_available "$BEDROCK_NATIVE_GATEWAY"; then
   fail "Bedrock :4002 does not expose native /model/{id}/converse routes"
   info "Image lacks native Bedrock route surface; set HEADROOM_BEDROCK_IMAGE to a native bedrock image and restart"
 else
-  RESOLVED=$(resolve_bedrock_native_model "$BEDROCK_TEST_MODEL")
+  BEDROCK_NATIVE_ALIAS="$BEDROCK_TEST_MODEL"
+  RESOLVED=$(resolve_bedrock_native_model "$BEDROCK_NATIVE_ALIAS")
   BEDROCK_NATIVE_MODEL=$(echo "$RESOLVED" | awk '{print $1}')
   if [[ -z "$BEDROCK_NATIVE_MODEL" ]]; then
-    fail "Could not resolve native model id from alias: $BEDROCK_TEST_MODEL"
-    info "Fix: regenerate litellm_config.yaml via ./scripts/start.sh"
+    fail "Could not resolve native model id from alias: $BEDROCK_NATIVE_ALIAS"
+    info "Fix: regenerate litellm_config.yaml via ./headroom-proxy config regen"
   else
+    CONVERSE_EXPECT_ANTHROPIC_COMPRESS=0
+    if [[ "$BEDROCK_NATIVE_MODEL" == anthropic.* || "$BEDROCK_NATIVE_MODEL" == *.anthropic.* ]]; then
+      CONVERSE_EXPECT_ANTHROPIC_COMPRESS=1
+    fi
+
+    STREAM_CHECK_ALIAS="$BEDROCK_NATIVE_ALIAS"
+    if [[ -n "$BEDROCK_ANTHROPIC_TEST_MODEL" ]]; then
+      STREAM_CHECK_ALIAS="$BEDROCK_ANTHROPIC_TEST_MODEL"
+    fi
+    STREAM_RESOLVED=$(resolve_bedrock_native_model "$STREAM_CHECK_ALIAS")
+    STREAM_CHECK_MODEL=$(echo "$STREAM_RESOLVED" | awk '{print $1}')
+    STREAM_EXPECT_ANTHROPIC_COMPRESS=0
+    if [[ "$STREAM_CHECK_MODEL" == anthropic.* || "$STREAM_CHECK_MODEL" == *.anthropic.* ]]; then
+      STREAM_EXPECT_ANTHROPIC_COMPRESS=1
+    fi
+
     TMPFILE=$(make_tmp)
-    run_bedrock_converse "$BEDROCK_NATIVE_GATEWAY" "$BEDROCK_NATIVE_MODEL" "Reply with the single word: BEDROCKNATIVEOK" "$TMPFILE"
+    CONVERSE_REQ_ID="test-bedrock-converse-$(date +%s)-$$"
+    run_bedrock_converse "$BEDROCK_NATIVE_GATEWAY" "$BEDROCK_NATIVE_MODEL" "Reply with the single word: BEDROCKNATIVEOK" "$TMPFILE" "$CONVERSE_REQ_ID"
     if [[ "$HTTP_CODE" == "200" ]]; then
       # Proxy returns OpenAI-format response (choices[0].message.content)
       CONTENT=$(python3 -c "
@@ -423,18 +472,41 @@ elif 'output' in d:
             print(b['text'].strip()); break
 " 2>/dev/null || echo "")
       ok "Bedrock :4002 converse passed (HTTP $HTTP_CODE, model: $BEDROCK_NATIVE_MODEL, region: ${AWS_REGION:-eu-central-1}, text: \"${CONTENT:-<empty>}\")"
+
+      if bedrock_log_has_for_request "$CONVERSE_REQ_ID" '"event":"bedrock_envelope_parse_error"'; then
+        fail "Bedrock :4002 converse had envelope parse error for request $CONVERSE_REQ_ID"
+      elif [[ $CONVERSE_EXPECT_ANTHROPIC_COMPRESS -eq 1 ]] && bedrock_log_has_for_request "$CONVERSE_REQ_ID" '"event":"bedrock_compression_skipped"'; then
+        fail "Bedrock :4002 converse skipped compression for anthropic request $CONVERSE_REQ_ID"
+        info "Check vendor detection path in Bedrock native image"
+      else
+        ok "Bedrock :4002 converse did not report compression skip/parse errors"
+      fi
     else
       ERR=$(python3 -c "import json; d=json.load(open('$TMPFILE')); print(str(d)[:220])" 2>/dev/null || head -c 220 "$TMPFILE")
       fail "Bedrock :4002 converse failed (HTTP $HTTP_CODE): $ERR"
       info "Check logs: docker logs headroom-bedrock-gateway"
     fi
 
+    if [[ -n "$STREAM_CHECK_MODEL" ]]; then
+      BEDROCK_NATIVE_MODEL="$STREAM_CHECK_MODEL"
+    fi
+
     TMPFILE=$(make_tmp)
-    run_bedrock_converse_stream "$BEDROCK_NATIVE_GATEWAY" "$BEDROCK_NATIVE_MODEL" "Reply with the single word: BEDROCKSTREAMOK" "$TMPFILE"
+    STREAM_REQ_ID="test-bedrock-converse-stream-$(date +%s)-$$"
+    run_bedrock_converse_stream "$BEDROCK_NATIVE_GATEWAY" "$BEDROCK_NATIVE_MODEL" "Reply with the single word: BEDROCKSTREAMOK" "$TMPFILE" "$STREAM_REQ_ID"
     # converse-stream uses EventStream passthrough — check for raw binary response bytes
     STREAM_BYTES=$(wc -c <"$TMPFILE" 2>/dev/null | tr -d ' ')
     if [[ "$HTTP_CODE" == "200" ]] && [[ "${STREAM_BYTES:-0}" -gt 0 ]]; then
       ok "Bedrock :4002 converse-stream passed (HTTP $HTTP_CODE, EventStream bytes: $STREAM_BYTES, model: $BEDROCK_NATIVE_MODEL, region: ${AWS_REGION:-eu-central-1})"
+
+      if bedrock_log_has_for_request "$STREAM_REQ_ID" '"event":"bedrock_envelope_parse_error"'; then
+        fail "Bedrock :4002 converse-stream had envelope parse error for request $STREAM_REQ_ID"
+      elif [[ $STREAM_EXPECT_ANTHROPIC_COMPRESS -eq 1 ]] && bedrock_log_has_for_request "$STREAM_REQ_ID" '"event":"bedrock_compression_skipped"'; then
+        fail "Bedrock :4002 converse-stream skipped compression for anthropic request $STREAM_REQ_ID"
+        info "Image regression: stream path is treating Anthropic model as non-anthropic vendor"
+      else
+        ok "Bedrock :4002 converse-stream did not report compression skip/parse errors"
+      fi
     else
       ERR=$(python3 -c "import json; d=json.load(open('$TMPFILE')); print(str(d)[:220])" 2>/dev/null || head -c 220 "$TMPFILE")
       fail "Bedrock :4002 converse-stream failed (HTTP $HTTP_CODE, bytes: ${STREAM_BYTES:-0}): $ERR"
@@ -447,10 +519,10 @@ echo
 
 # --- Test 5c: Unified stats aggregation script ---
 echo "[ Test 5c: Unified stats aggregation (:4000 + :4002) ]"
-COMBINED_JSON=$(python3 "$DIR/scripts/combined_stats.py" 2>/dev/null || true)
+COMBINED_JSON=$(python3 "$DIR/scripts/headroom_python.py" combined-stats 2>/dev/null || true)
 if [[ -z "$COMBINED_JSON" ]]; then
   fail "Unified stats script returned no output"
-  info "Fix: ensure scripts/combined_stats.py is present and Python can run it"
+  info "Fix: ensure scripts/headroom_python.py is present and Python can run it"
 else
   if echo "$COMBINED_JSON" | python3 -c '
 import json,sys
@@ -504,11 +576,11 @@ if errors:
     fail "kilo.jsonc provider baseURLs are not correctly set"
     info "Copilot/openai-compatible: http://127.0.0.1:4000/v1"
     info "amazon-bedrock:           http://127.0.0.1:4002"
-    info "Fix: ./scripts/setup-kilo.sh"
+    info "Fix: ./headroom-proxy config kilo"
   fi
 else
   fail "kilo.jsonc not found at $KILO_CONF"
-  info "Fix: ./scripts/setup-kilo.sh"
+  info "Fix: ./headroom-proxy config kilo"
 fi
 echo
 
@@ -520,8 +592,8 @@ echo
 
 if [[ $FAIL -gt 0 ]]; then
   echo "  Some tests failed. Quick fixes:"
-  echo "    Not running:  ./scripts/start.sh"
-  echo "    Auth (403):   ./scripts/auth-fix.sh"
+  echo "    Not running:  ./headroom-proxy up"
+  echo "    Auth (403):   ./headroom-proxy auth"
   echo "    AWS expired:  aws sso login --profile ${BEDROCK_AWS_PROFILE:-default}"
   exit 1
 fi

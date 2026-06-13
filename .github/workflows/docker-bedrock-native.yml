@@ -4,9 +4,9 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  # Source is now upstream chopratejas/headroom — PR #917 (converse-stream) merged at b08ec15b.
+  # Source defaults to upstream headroom main; workflow_dispatch can override.
   HEADROOM_SOURCE_REPO: chopratejas/headroom
-  HEADROOM_SOURCE_REF: b08ec15b0d392b8b8cf93dbadaee4b7e6b465f1c
+  HEADROOM_SOURCE_REF: main
 
 "on":
   workflow_dispatch:
@@ -18,7 +18,7 @@ env:
       headroom_source_ref:
         description: "Headroom source ref (commit/tag/branch)"
         required: false
-        default: "b08ec15b0d392b8b8cf93dbadaee4b7e6b465f1c"
+        default: "main"
   push:
     branches: [main]
     paths:
@@ -82,6 +82,7 @@ jobs:
           tags: |
             type=raw,value=bedrock-native-${{ steps.short-sha.outputs.sha }}
             type=raw,value=bedrock-native
+            type=raw,value=bedrock-native-latest
             type=ref,event=branch,prefix=bedrock-native-
 
       - name: Build and push image
