@@ -28,7 +28,8 @@ ENTROPY_HITS=$(
   python3 - <<'PY'
 import os,re
 root='.'
-skip_dirs={'.data','.git','.kilo','.playwright-mcp'}
+skip_dirs={'.data','.git','.kilo','.playwright-mcp','.venv'}
+skip_files={'uv.lock','.env'}
 pat=re.compile(r'[A-Za-z0-9+/=_-]{32,}')
 ignore_ext={'.png','.jpg','.jpeg','.gif','.webp','.pdf','.zip','.gz'}
 results=[]
@@ -36,6 +37,8 @@ for dp, dns, fns in os.walk(root):
     dns[:] = [d for d in dns if d not in skip_dirs]
     for fn in fns:
         p=os.path.join(dp,fn)
+        if fn in skip_files:
+            continue
         if any(fn.lower().endswith(ext) for ext in ignore_ext):
             continue
         try:
