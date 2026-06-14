@@ -461,12 +461,30 @@ def _merge_unified_stats(base: dict[str, Any], bedrock: _BedrockStats) -> dict[s
             after = _to_int(entry.get("input_tokens_optimized"))
             out_toks = _to_int(entry.get("output_tokens", 0))
             saved = _to_int(entry.get("tokens_saved"))
+            action = str(entry.get("action", ""))
 
             # Per-request USD estimate for the "savings" column in the request log.
             req_savings_usd = 0.0
             req_price = _lookup_price(display_model)
             if req_price is not None and saved > 0:
                 req_savings_usd = saved * req_price[0]
+
+            # Build meaningful per-request transforms from what the Bedrock shim
+            # actually did, so the dashboard's expandable row shows real detail
+            # instead of a single opaque shim tag.
+            transforms: list[str] = []
+            if bool(entry.get("compressed")):
+                transforms.append("bedrock_native:compress")
+            if bool(entry.get("marker_applied")):
+                transforms.append("bedrock_native:cache_control")
+            if action:
+                transforms.append(f"bedrock_native:{action}")
+            if not transforms:
+                transforms.append("bedrock_native:passthrough")
+
+            # Surface compressed input as a single "context" waste signal so the
+            # per-request Waste Detected panel renders for Bedrock rows too.
+            waste_signals = {"redundant_context": saved} if saved > 0 else None
 
             req_row = {
                 "request_id": f"bedrock-native-{entry.get('timestamp', '')}",
@@ -483,12 +501,14 @@ def _merge_unified_stats(base: dict[str, Any], bedrock: _BedrockStats) -> dict[s
                 "total_latency_ms": 0.0,
                 "tags": {
                     "lane": "bedrock_native",
-                    "action": entry.get("action", ""),
+                    "action": action,
                     "raw_model": raw_model,
                 },
+                # We place cache_control markers but don't observe provider cache
+                # hits, so don't claim one here.
                 "cache_hit": False,
-                "transforms_applied": ["bedrock_native_shim"],
-                "waste_signals": None,
+                "transforms_applied": transforms,
+                "waste_signals": waste_signals,
                 "error": "request_failed" if bool(entry.get("failed", False)) else None,
                 "turn_id": None,
             }

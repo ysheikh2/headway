@@ -227,6 +227,73 @@ except Exception:
 '
 }
 
+get_copilot_saved_tokens() {
+  local base_url="$1"
+  curl -s --max-time 8 "$base_url/stats" | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    print(int((d.get("tokens") or {}).get("saved",0)))
+except Exception:
+    print(0)
+'
+}
+
+run_copilot_compression_probe() {
+  # Build a compressible OpenAI-format conversation and POST it to the Copilot
+  # lane (:4000). A large, stale tool result sits early in history (outside the
+  # protect_recent window) so headroom's compression pipeline removes tokens.
+  # Compression is recorded before upstream forwarding, so the savings delta is
+  # measurable regardless of the upstream completion status.
+  local base_url="$1"
+  local model="$2"
+  local outfile="$3"
+  local payload_file
+  payload_file=$(make_tmp)
+  python3 - "$payload_file" "$model" <<'PY'
+import json, sys, time
+
+out, model = sys.argv[1], sys.argv[2]
+# Unique per run so the CompressionCache never short-circuits the pipeline.
+run_id = int(time.time() * 1000)
+arr = [
+    {"id": i % 25, "name": f"item{i % 25}", "status": "ok", "count": i,
+     "payload": "x" * 80, "run": run_id}
+    for i in range(1200)
+]
+big = json.dumps(arr)
+msgs = [
+    {"role": "user", "content": "Start the analysis."},
+    {"role": "assistant", "content": None,
+     "tool_calls": [{"id": "call_probe_42", "type": "function",
+                     "function": {"name": "custom_fetch", "arguments": "{\"q\":\"all\"}"}}]},
+    # Big stale tool result (index 2 of 14 — outside protect_recent=2).
+    {"role": "tool", "tool_call_id": "call_probe_42", "content": big},
+    {"role": "assistant", "content": "Data fetched. Reviewing."},
+    {"role": "user", "content": "Any errors?"},
+    {"role": "assistant", "content": "No errors found."},
+    {"role": "user", "content": "Check the totals."},
+    {"role": "assistant", "content": "Totals look correct."},
+    {"role": "user", "content": "What about the averages?"},
+    {"role": "assistant", "content": "Averages are within range."},
+    {"role": "user", "content": "Anything else to check?"},
+    {"role": "assistant", "content": "All checks passed."},
+    # Recent protected (last 2).
+    {"role": "user", "content": "Summarize in one short line."},
+    {"role": "assistant", "content": "Ready."},
+]
+payload = {"model": model, "messages": msgs, "max_tokens": 16, "stream": False}
+with open(out, "w", encoding="utf-8") as f:
+    f.write(json.dumps(payload, separators=(",", ":")))
+PY
+
+  HTTP_CODE=$(curl -s -o "$outfile" -w "%{http_code}" --max-time 60 \
+    "$base_url/v1/chat/completions" \
+    -H "Content-Type: application/json" \
+    --data-binary @"$payload_file" \
+    2>/dev/null || echo "000")
+}
+
 run_bedrock_converse_stream() {
   local base_url="$1"
   local model="$2"
@@ -468,6 +535,29 @@ else
     info "Copilot device auth pending: $CODE_LINE"
     info "Open: https://github.com/login/device"
   fi
+fi
+echo
+
+# --- Test 4b: Copilot lane compression (:4000) ---
+# Guards against silent compression regressions on the Copilot lane (the bedrock
+# lane already has an equivalent probe). Only runs if the Copilot e2e above
+# resolved a working model.
+echo "[ Test 4b: Copilot lane compression (:4000) ]"
+if [[ "$HTTP_CODE" == "200" && -n "$COPILOT_TEST_MODEL" ]]; then
+  PROBE_OUT=$(make_tmp)
+  COP_SAVED_BEFORE=$(get_copilot_saved_tokens "$GATEWAY")
+  run_copilot_compression_probe "$GATEWAY" "$COPILOT_TEST_MODEL" "$PROBE_OUT"
+  COP_PROBE_HTTP="$HTTP_CODE"
+  COP_SAVED_AFTER=$(get_copilot_saved_tokens "$GATEWAY")
+  COP_DELTA=$((COP_SAVED_AFTER - COP_SAVED_BEFORE))
+  if [[ "$COP_DELTA" -gt 0 ]]; then
+    ok "Copilot compression recorded measurable token savings (+${COP_DELTA} tokens, model: $COPILOT_TEST_MODEL, probe HTTP $COP_PROBE_HTTP)"
+  else
+    fail "Copilot compression probe removed 0 tokens (saved before=$COP_SAVED_BEFORE after=$COP_SAVED_AFTER, model: $COPILOT_TEST_MODEL, probe HTTP $COP_PROBE_HTTP)"
+    info "A compressible payload (large stale tool result) should yield savings; check headroom compression pipeline on :4000."
+  fi
+else
+  info "Skipped: Copilot e2e did not resolve a working model above."
 fi
 echo
 

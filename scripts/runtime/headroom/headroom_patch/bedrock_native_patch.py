@@ -768,6 +768,7 @@ def _record_stats(
                 "tokens_saved": max(0, before - (after if after > 0 else before)),
                 "failed": failed,
                 "compressed": compressed,
+                "marker_applied": marker_applied,
             }
         )
         if len(_stats.recent_requests) > 50:
