@@ -126,7 +126,7 @@ def apply_patch(upstream: str) -> str:
 
 def validate_dashboard(html: str) -> None:
     required_snippets = [
-        "x-data=\"dashboard()\"",
+        'x-data="dashboard()"',
         "fetch('/stats?cached=1')",
         "fetch('/stats-history')",
         "Unified Gateway Lanes",

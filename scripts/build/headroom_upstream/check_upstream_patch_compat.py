@@ -19,7 +19,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PATCH_SCRIPT = REPO_ROOT / "scripts" / "build" / "headroom_upstream" / "patch_headroom_upstream.py"
 DEFAULT_RECORD = (
@@ -76,7 +75,16 @@ def apply_patch(headroom_root: Path) -> None:
 
 
 def run_cargo_check(headroom_root: Path) -> None:
-    run(["cargo", "check", "-p", "headroom-proxy", "--manifest-path", str(headroom_root / "Cargo.toml")])
+    run(
+        [
+            "cargo",
+            "check",
+            "-p",
+            "headroom-proxy",
+            "--manifest-path",
+            str(headroom_root / "Cargo.toml"),
+        ]
+    )
 
 
 def maybe_update_record(record_path: Path, record: dict[str, object]) -> bool:
@@ -105,7 +113,9 @@ def maybe_update_record(record_path: Path, record: dict[str, object]) -> bool:
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", default="chopratejas/headroom", help="Upstream GitHub repo owner/name")
+    parser.add_argument(
+        "--repo", default="chopratejas/headroom", help="Upstream GitHub repo owner/name"
+    )
     parser.add_argument("--ref", default="main", help="Git ref to validate")
     parser.add_argument(
         "--cargo-check",

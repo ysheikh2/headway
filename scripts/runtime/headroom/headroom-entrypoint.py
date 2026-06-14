@@ -22,9 +22,11 @@ def _find_site_packages() -> pathlib.Path | None:
     """Locate the writable site-packages dir that contains headroom."""
     # Derive from headroom's own __file__ — guaranteed to be the right dir.
     try:
-        import headroom as _hr  # ty: ignore[unresolved-import]
+        import headroom as _hr
 
-        return pathlib.Path(_hr.__file__).parent.parent
+        hr_file = getattr(_hr, "__file__", None)
+        if hr_file:
+            return pathlib.Path(hr_file).parent.parent
     except Exception:
         pass
     # Fallback: first writable entry in sys.path that looks like site-packages.
