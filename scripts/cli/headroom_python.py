@@ -444,7 +444,9 @@ def cmd_combined_stats() -> int:
     _bp_tokens = _bp.get("tokens", {}) if isinstance(_bp.get("tokens"), dict) else {}
     _bp_summary = _bp.get("summary", {}) if isinstance(_bp.get("summary"), dict) else {}
     _bp_compression = (
-        _bp_summary.get("compression", {}) if isinstance(_bp_summary.get("compression"), dict) else {}
+        _bp_summary.get("compression", {})
+        if isinstance(_bp_summary.get("compression"), dict)
+        else {}
     )
     lanes = {
         "copilot": {
@@ -466,8 +468,7 @@ def cmd_combined_stats() -> int:
             or _int_num(_bd, "summary", "api_requests"),
             "input_tokens": int(_bp_tokens.get("input") or 0),
             "output_tokens": int(_bp_tokens.get("output") or 0),
-            "tokens_saved": _int_num(_bp, "tokens", "saved")
-            or _int_num(_bd, "tokens", "saved"),
+            "tokens_saved": _int_num(_bp, "tokens", "saved") or _int_num(_bd, "tokens", "saved"),
             "compression_tokens_saved": _int_num(_bp, "tokens", "proxy_compression_saved")
             or _int_num(_bd, "tokens", "proxy_compression_saved"),
             "requests_cached": _int_num(_bp, "requests", "cached")

@@ -560,11 +560,7 @@ def _add_cache_control_marker(messages: list[dict[str, Any]]) -> bool:
             block = content[j]
             if not isinstance(block, dict):
                 continue
-            if (
-                block.get("type") == "text"
-                or "text" in block
-                or block.get("type") == "tool_result"
-            ):
+            if block.get("type") == "text" or "text" in block or block.get("type") == "tool_result":
                 if "cache_control" not in block:
                     block["cache_control"] = {"type": "ephemeral"}
                     return True
@@ -591,7 +587,9 @@ def _compress_bedrock_body(
                             "event": "converse_body",
                             "action": action,
                             "top_level_keys": sorted(body.keys()),
-                            "system_chars": len(json.dumps(body.get("system", ""), ensure_ascii=False)),
+                            "system_chars": len(
+                                json.dumps(body.get("system", ""), ensure_ascii=False)
+                            ),
                             "toolConfig_chars": len(
                                 json.dumps(body.get("toolConfig", ""), ensure_ascii=False)
                             ),
@@ -608,9 +606,7 @@ def _compress_bedrock_body(
         return body, 0, 0, False
 
     cached_input = _COMP_CACHE.apply_cached(anthropic_messages)
-    compressed_messages, tokens_before, tokens_after = _compress_messages(
-        cached_input, model_id
-    )
+    compressed_messages, tokens_before, tokens_after = _compress_messages(cached_input, model_id)
     _COMP_CACHE.update_from_result(cached_input, compressed_messages)
 
     outgoing_messages = copy.deepcopy(compressed_messages)
@@ -681,9 +677,7 @@ def _compress_anthropic_v1_body(
 
     work = copy.deepcopy(messages)
     cached_input = _COMP_CACHE.apply_cached(work)
-    compressed_messages, tokens_before, tokens_after = _compress_messages(
-        cached_input, model_id
-    )
+    compressed_messages, tokens_before, tokens_after = _compress_messages(cached_input, model_id)
     _COMP_CACHE.update_from_result(cached_input, compressed_messages)
 
     outgoing = copy.deepcopy(compressed_messages)
@@ -1144,9 +1138,9 @@ def apply_patch() -> None:
                             action=action,
                         )
                     )
-                    body_bytes = json.dumps(updated, ensure_ascii=False, separators=(",", ":")).encode(
-                        "utf-8"
-                    )
+                    body_bytes = json.dumps(
+                        updated, ensure_ascii=False, separators=(",", ":")
+                    ).encode("utf-8")
                     compressed = before > 0 and after > 0 and after < before
                 except Exception:
                     failed = True
@@ -1202,7 +1196,9 @@ def apply_patch() -> None:
 
             @app.get("/healthz")
             async def bedrock_healthz():
-                return JSONResponse(status_code=200, content={"ok": True, "service": "headroom-proxy"})
+                return JSONResponse(
+                    status_code=200, content={"ok": True, "service": "headroom-proxy"}
+                )
 
         return app
 

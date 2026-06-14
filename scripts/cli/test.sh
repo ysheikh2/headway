@@ -281,9 +281,9 @@ echo
 # --- Preflight: Copilot auth check ---
 # Detect a pending GitHub device-code auth early so tests fail fast instead of
 # waiting through 25 s × 3 retries × N model candidates.
-COPILOT_DEVICE_CODE=$(docker logs litellm-gateway 2>/dev/null \
-  | grep -E 'Please visit https://github.com/login/device and enter code' \
-  | tail -1 || true)
+COPILOT_DEVICE_CODE=$(docker logs litellm-gateway 2>/dev/null |
+  grep -E 'Please visit https://github.com/login/device and enter code' |
+  tail -1 || true)
 if [[ -n "$COPILOT_DEVICE_CODE" ]]; then
   echo "[WARN] Copilot device auth is pending — complete it before testing:"
   echo "       $COPILOT_DEVICE_CODE"
@@ -296,7 +296,7 @@ fi
 # The Kompress ONNX model cold-load takes ~30 s. If the gateway has been up
 # for less than 90 s, pause briefly so the prewarm thread finishes before the
 # compression probe runs (avoids spurious timeouts immediately after a restart).
-HEADROOM_UPTIME=$(docker inspect headroom-gateway --format '{{.State.StartedAt}}' 2>/dev/null | \
+HEADROOM_UPTIME=$(docker inspect headroom-gateway --format '{{.State.StartedAt}}' 2>/dev/null |
   python3 -c "
 import sys, datetime
 try:

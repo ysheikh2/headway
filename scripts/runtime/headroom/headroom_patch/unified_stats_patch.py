@@ -12,7 +12,9 @@ from urllib.request import urlopen
 
 # Pricing is loaded lazily from the models.dev cache synced by `./headway up/update/stats`.
 # Path inside the container via the .data/headroom volume mount.
-_MODELS_DEV_CACHE_PATH = os.getenv("HEADWAY_MODELS_DEV_CACHE", "/home/nonroot/.headroom/models-dev.json")
+_MODELS_DEV_CACHE_PATH = os.getenv(
+    "HEADWAY_MODELS_DEV_CACHE", "/home/nonroot/.headroom/models-dev.json"
+)
 _models_dev_pricing_cache: dict[str, tuple[float, float]] | None = None
 
 
@@ -311,9 +313,7 @@ def _merge_unified_stats(base: dict[str, Any], bedrock: _BedrockStats) -> dict[s
         output_toks = _to_int(shim.get("output_tokens"))
         tokens_after = _to_int(shim.get("tokens_after"))
         avg_compression_pct = (
-            100.0 * saved / (saved + tokens_after)
-            if (saved + tokens_after) > 0
-            else 0.0
+            100.0 * saved / (saved + tokens_after) if (saved + tokens_after) > 0 else 0.0
         )
 
         lanes["bedrock_native"]["api_requests"] = api
@@ -353,7 +353,9 @@ def _merge_unified_stats(base: dict[str, Any], bedrock: _BedrockStats) -> dict[s
     # This augments (does not replace) copilot-lane stats.
     if isinstance(shim, dict):
         by_model = shim.get("by_model") if isinstance(shim.get("by_model"), dict) else {}
-        recent = shim.get("recent_requests") if isinstance(shim.get("recent_requests"), list) else []
+        recent = (
+            shim.get("recent_requests") if isinstance(shim.get("recent_requests"), list) else []
+        )
 
         cost_block = _as_dict(payload.get("cost"))
         per_model = _as_dict(cost_block.get("per_model"))
@@ -368,7 +370,7 @@ def _merge_unified_stats(base: dict[str, Any], bedrock: _BedrockStats) -> dict[s
                 continue
             display_model = _display_model_name(str(model))
             req = _to_int(row.get("requests"))
-            sent = _to_int(row.get("tokens_before"))       # input tokens BEFORE compression
+            sent = _to_int(row.get("tokens_before"))  # input tokens BEFORE compression
             after_toks = _to_int(row.get("tokens_after"))  # input tokens AFTER compression
             saved = _to_int(row.get("tokens_saved"))
             out_toks = _to_int(row.get("output_tokens", 0))
@@ -442,9 +444,13 @@ def _merge_unified_stats(base: dict[str, Any], bedrock: _BedrockStats) -> dict[s
         summary["cost"] = sum_cost
         payload["summary"] = summary
 
-        request_logs = payload.get("request_logs") if isinstance(payload.get("request_logs"), list) else []
+        request_logs = (
+            payload.get("request_logs") if isinstance(payload.get("request_logs"), list) else []
+        )
         recent_requests = (
-            payload.get("recent_requests") if isinstance(payload.get("recent_requests"), list) else []
+            payload.get("recent_requests")
+            if isinstance(payload.get("recent_requests"), list)
+            else []
         )
         for entry in recent:
             if not isinstance(entry, dict):
@@ -519,8 +525,12 @@ def _merge_unified_history(base: dict[str, Any], bedrock: _BedrockStats) -> dict
     lifetime: dict[str, Any] = _as_dict(payload.get("lifetime"))
     payload["lifetime"] = lifetime
     shim = _build_bedrock_shim_stats()
-    bedrock_api = _to_int(shim.get("api_requests")) if isinstance(shim, dict) else bedrock.api_requests
-    bedrock_saved = _to_int(shim.get("tokens_saved")) if isinstance(shim, dict) else bedrock.tokens_saved
+    bedrock_api = (
+        _to_int(shim.get("api_requests")) if isinstance(shim, dict) else bedrock.api_requests
+    )
+    bedrock_saved = (
+        _to_int(shim.get("tokens_saved")) if isinstance(shim, dict) else bedrock.tokens_saved
+    )
 
     lifetime["api_requests"] = _to_int(lifetime.get("api_requests")) + bedrock_api
     lifetime["tokens_saved"] = _to_int(lifetime.get("tokens_saved")) + bedrock_saved

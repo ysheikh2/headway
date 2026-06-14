@@ -339,9 +339,9 @@ sync_pricing() {
   mkdir -p "$cache_dir"
 
   if curl --silent --max-time 10 --fail \
-      --output "$tmp_file" \
-      "https://models.dev/api.json" 2>/dev/null \
-      && python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$tmp_file" 2>/dev/null; then
+    --output "$tmp_file" \
+    "https://models.dev/api.json" 2>/dev/null &&
+    python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$tmp_file" 2>/dev/null; then
     mv "$tmp_file" "$cache_file"
     echo "[pricing] cache updated from models.dev"
   else
@@ -908,7 +908,7 @@ cmd_test() {
   local aws_region="${AWS_REGION:-$DEFAULT_AWS_REGION}"
 
   if ! AWS_REGION="$aws_region" AWS_DEFAULT_REGION="$aws_region" \
-       aws sts get-caller-identity --profile "$bedrock_profile" >/dev/null 2>&1; then
+    aws sts get-caller-identity --profile "$bedrock_profile" >/dev/null 2>&1; then
     echo "ERROR: AWS credentials expired for profile '$bedrock_profile'."
     echo "       Fix: ./headway auth"
     exit 1
