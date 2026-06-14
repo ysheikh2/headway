@@ -217,7 +217,7 @@ PY
 
 get_bedrock_native_saved_tokens() {
   local base_url="$1"
-  curl -s --max-time 8 "$base_url/bedrock-native/stats" 2>/dev/null | python3 -c '
+  { curl -s --max-time 8 "$base_url/bedrock-native/stats" 2>/dev/null || echo '{}'; } | python3 -c '
 import json,sys
 try:
     d=json.load(sys.stdin)
@@ -229,7 +229,7 @@ except Exception:
 
 get_copilot_saved_tokens() {
   local base_url="$1"
-  curl -s --max-time 8 "$base_url/stats" 2>/dev/null | python3 -c '
+  { curl -s --max-time 8 "$base_url/stats" 2>/dev/null || echo '{}'; } | python3 -c '
 import json,sys
 try:
     d=json.load(sys.stdin)
@@ -241,7 +241,7 @@ except Exception:
 
 get_copilot_cache_read_tokens() {
   local base_url="$1"
-  curl -s --max-time 8 "$base_url/stats" 2>/dev/null | python3 -c '
+  { curl -s --max-time 8 "$base_url/stats" 2>/dev/null || echo '{}'; } | python3 -c '
 import json,sys
 try:
     d=json.load(sys.stdin)
@@ -253,7 +253,7 @@ except Exception:
 
 get_copilot_cache_savings_usd() {
   local base_url="$1"
-  curl -s --max-time 8 "$base_url/stats" 2>/dev/null | python3 -c '
+  { curl -s --max-time 8 "$base_url/stats" 2>/dev/null || echo '{}'; } | python3 -c '
 import json,sys
 try:
     d=json.load(sys.stdin)

@@ -8,7 +8,7 @@ set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 AWS_PROFILE_NAME="${AWS_PROFILE:-default}"
-BEDROCK_DISCOVERY_AWS_PROFILE=""
+BEDROCK_DISCOVERY_AWS_PROFILE="${BEDROCK_DISCOVERY_AWS_PROFILE:-}"
 OUTPUT_FILE="$DIR/litellm_config.yaml"
 AWS_REGION_NAME="${AWS_REGION_NAME:-eu-central-1}"
 

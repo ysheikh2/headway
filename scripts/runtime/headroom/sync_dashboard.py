@@ -190,15 +190,15 @@ def fetch_upstream(url: str) -> str:
 
 
 def apply_patch(upstream: str) -> str:
+    # Panel insertion is idempotent: skip if already present (upstream may adopt it).
     if "Unified Gateway Lanes" in upstream:
-        # Upstream eventually may gain this panel; keep idempotent behavior.
-        return upstream
+        patched = upstream
+    else:
+        if INSERT_MARKER not in upstream:
+            raise SystemExit("Patch marker not found in upstream dashboard; patch must be updated.")
+        patched = upstream.replace(INSERT_MARKER, UNIFIED_PANEL_BLOCK + INSERT_MARKER, 1)
 
-    if INSERT_MARKER not in upstream:
-        raise SystemExit("Patch marker not found in upstream dashboard; patch must be updated.")
-
-    patched = upstream.replace(INSERT_MARKER, UNIFIED_PANEL_BLOCK + INSERT_MARKER, 1)
-
+    # Always apply independent patches regardless of panel presence.
     if SESSION_HERO_OLD in patched:
         patched = patched.replace(SESSION_HERO_OLD, SESSION_HERO_NEW, 1)
     else:

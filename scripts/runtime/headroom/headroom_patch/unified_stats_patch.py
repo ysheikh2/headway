@@ -504,7 +504,7 @@ def _merge_unified_stats(base: dict[str, Any], bedrock: _BedrockStats) -> dict[s
                 if saved > 0:
                     compression_savings_usd = saved * in_price
                     bedrock_compression_savings_usd += compression_savings_usd
-                if cr_toks > 0:
+                if cr_toks > 0 or cw_toks > 0:
                     # Cache reads bill at cache_read price (90% off) instead of input.
                     read_savings = cr_toks * max(0.0, rec["input"] - rec["cache_read"])
                     # Cache writes bill a 25% premium over input.
@@ -572,8 +572,8 @@ def _merge_unified_stats(base: dict[str, Any], bedrock: _BedrockStats) -> dict[s
                 float(breakdown.get("cache_savings_usd") or 0.0) + bedrock_cache_savings_usd
             )
             sum_cost["breakdown"] = breakdown
-        if bedrock_compression_savings_usd > 0:
-            # Recompute without/with totals (compression changes the base cost).
+        if bedrock_total_savings_usd != 0:
+            # Recompute without/with totals whenever any Bedrock savings occurred.
             sum_cost["without_headroom_usd"] = (
                 float(sum_cost.get("without_headroom_usd") or 0.0) + bedrock_without_usd
             )
@@ -616,7 +616,7 @@ def _merge_unified_stats(base: dict[str, Any], bedrock: _BedrockStats) -> dict[s
             if req_rec is not None:
                 if saved > 0:
                     req_compression_usd = saved * req_rec["input"]
-                if cr_toks > 0:
+                if cr_toks > 0 or cw_toks > 0:
                     read_savings = cr_toks * max(0.0, req_rec["input"] - req_rec["cache_read"])
                     write_premium = cw_toks * max(0.0, req_rec["cache_write"] - req_rec["input"])
                     req_cache_usd = read_savings - write_premium
@@ -700,7 +700,7 @@ def _bedrock_savings_usd(shim: dict[str, Any]) -> tuple[float, float]:
             comp_total += saved * rec["input"]
         cr_toks = _to_int(row.get("cache_read_tokens", 0))
         cw_toks = _to_int(row.get("cache_write_tokens", 0))
-        if cr_toks > 0:
+        if cr_toks > 0 or cw_toks > 0:
             read_savings = cr_toks * max(0.0, rec["input"] - rec["cache_read"])
             write_premium = cw_toks * max(0.0, rec["cache_write"] - rec["input"])
             cache_total += read_savings - write_premium

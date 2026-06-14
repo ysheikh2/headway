@@ -1125,8 +1125,8 @@ async def _handle_v1_messages(request):
                 "utf-8"
             )
             compressed = before > 0 and after > 0 and after < before
-        except Exception:
-            failed = True
+        except Exception:  # noqa: BLE001
+            pass  # compression is optional; forward original body
 
     try:
         # For streaming, output/cache tokens are only known once the stream is
@@ -1333,8 +1333,8 @@ def apply_patch() -> None:
                         updated, ensure_ascii=False, separators=(",", ":")
                     ).encode("utf-8")
                     compressed = before > 0 and after > 0 and after < before
-                except Exception:
-                    failed = True
+                except Exception:  # noqa: BLE001
+                    pass  # compression is optional; forward original body
 
             is_stream = _is_streaming_action(action)
             try:

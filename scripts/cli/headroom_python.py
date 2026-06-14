@@ -160,10 +160,7 @@ def cmd_kilo_check(kilo_conf: str) -> int:
 
 
 def _upsert_env_var(items: list[dict[str, Any]], name: str, value: str) -> None:
-    for item in items:
-        if isinstance(item, dict) and item.get("name") == name:
-            item["value"] = value
-            return
+    items[:] = [i for i in items if not (isinstance(i, dict) and i.get("name") == name)]
     items.append({"name": name, "value": value})
 
 
