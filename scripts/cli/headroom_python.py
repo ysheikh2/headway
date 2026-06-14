@@ -15,6 +15,11 @@ Subcommands:
 - combined-stats
 - stats-report <raw_stats> <raw_history> <raw_combined>
 - generate-config <tmp_dir> <output_file> [copilot_token_file]
+- build-bedrock-compression-payload <outfile>
+- build-copilot-cache-payload <outfile> <model>
+- build-copilot-compression-payload <outfile> <model>
+- select-bedrock-model          (reads /v1/models JSON on stdin)
+- select-bedrock-anthropic-model (reads /v1/models JSON on stdin)
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -1034,6 +1040,198 @@ model_list:
     return 0
 
 
+# ---- test payload builders ----
+
+
+def cmd_build_bedrock_compression_payload(outfile: str) -> int:
+    """Build a Bedrock Converse-format compression probe payload and write it to outfile."""
+    probe_run_id = int(time.time() * 1000)
+    arr = [
+        {
+            "id": i % 25,
+            "name": f"item{i % 25}",
+            "status": "ok",
+            "count": i,
+            "payload": "x" * 80,
+            "run": probe_run_id,
+        }
+        for i in range(2000)
+    ]
+    msgs = [
+        {"role": "user", "content": [{"type": "text", "text": "Start the analysis."}]},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "toolUse": {
+                        "toolUseId": "toolu_probe_42",
+                        "name": "custom_fetch",
+                        "input": {"q": "all"},
+                    }
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "toolResult": {
+                        "toolUseId": "toolu_probe_42",
+                        "content": [{"json": arr}],
+                    }
+                }
+            ],
+        },
+        {"role": "assistant", "content": [{"type": "text", "text": "Data fetched. Reviewing."}]},
+        {"role": "user", "content": [{"type": "text", "text": "Any errors?"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "No errors found."}]},
+        {"role": "user", "content": [{"type": "text", "text": "Check the totals."}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Totals look correct."}]},
+        {"role": "user", "content": [{"type": "text", "text": "What about the averages?"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Averages are within range."}]},
+        {"role": "user", "content": [{"type": "text", "text": "Anything else to check?"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "All checks passed."}]},
+        {"role": "user", "content": [{"type": "text", "text": "Summarize in one short line."}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Ready."}]},
+    ]
+    payload = {"messages": msgs, "inferenceConfig": {"maxTokens": 32}}
+    with open(outfile, "w", encoding="utf-8") as f:
+        f.write(json.dumps(payload, separators=(",", ":")))
+    return 0
+
+
+def cmd_build_copilot_cache_payload(outfile: str, model: str) -> int:
+    """Build a stable OpenAI-format cache probe payload (same content each run for cache hits)."""
+    arr = [
+        {"id": i % 25, "name": f"item{i % 25}", "status": "ok", "count": i, "payload": "x" * 60}
+        for i in range(500)
+    ]
+    big = json.dumps(arr)
+    msgs = [
+        {"role": "user", "content": "Analyze this dataset and remember it."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_cache",
+                    "type": "function",
+                    "function": {"name": "fetch", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_cache", "content": big},
+        {"role": "assistant", "content": "Loaded."},
+        {"role": "user", "content": "Ready?"},
+        {"role": "assistant", "content": "Yes."},
+    ]
+    payload = {"model": model, "messages": msgs, "max_tokens": 8, "stream": False}
+    with open(outfile, "w", encoding="utf-8") as f:
+        f.write(json.dumps(payload, separators=(",", ":")))
+    return 0
+
+
+def cmd_build_copilot_compression_payload(outfile: str, model: str) -> int:
+    """Build a unique-per-run OpenAI-format compression probe payload."""
+    run_id = int(time.time() * 1000)
+    arr = [
+        {
+            "id": i % 25,
+            "name": f"item{i % 25}",
+            "status": "ok",
+            "count": i,
+            "payload": "x" * 80,
+            "run": run_id,
+        }
+        for i in range(1200)
+    ]
+    big = json.dumps(arr)
+    msgs = [
+        {"role": "user", "content": "Start the analysis."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_probe_42",
+                    "type": "function",
+                    "function": {"name": "custom_fetch", "arguments": '{"q":"all"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_probe_42", "content": big},
+        {"role": "assistant", "content": "Data fetched. Reviewing."},
+        {"role": "user", "content": "Any errors?"},
+        {"role": "assistant", "content": "No errors found."},
+        {"role": "user", "content": "Check the totals."},
+        {"role": "assistant", "content": "Totals look correct."},
+        {"role": "user", "content": "What about the averages?"},
+        {"role": "assistant", "content": "Averages are within range."},
+        {"role": "user", "content": "Anything else to check?"},
+        {"role": "assistant", "content": "All checks passed."},
+        {"role": "user", "content": "Summarize in one short line."},
+        {"role": "assistant", "content": "Ready."},
+    ]
+    payload = {"model": model, "messages": msgs, "max_tokens": 16, "stream": False}
+    with open(outfile, "w", encoding="utf-8") as f:
+        f.write(json.dumps(payload, separators=(",", ":")))
+    return 0
+
+
+def cmd_select_bedrock_model() -> int:
+    """Read /v1/models JSON on stdin; print preferred bedrock model aliases, one per line."""
+    raw = sys.stdin.read().strip()
+    try:
+        data = json.loads(raw).get("data", [])
+    except Exception:
+        return 0
+    ids = [m.get("id", "") for m in data if isinstance(m, dict)]
+    preferred = [
+        "bedrock-mistral-voxtral-mini-3b-2507",
+        "bedrock-google-gemma-3-4b-it",
+        "bedrock-mistral-ministral-3-3b-instruct",
+        "bedrock-eu-amazon-nova-micro-v1-0",
+        "bedrock-eu-amazon-nova-2-lite-v1-0",
+        "bedrock-global-amazon-nova-2-lite-v1-0",
+        "bedrock-eu-amazon-nova-lite-v1-0",
+        "bedrock-openai-gpt-oss-20b-1-0",
+        "bedrock-eu-anthropic-claude-haiku-4-5-20251001-v1-0",
+        "bedrock-global-anthropic-claude-haiku-4-5-20251001-v1-0",
+    ]
+    selected = [p for p in preferred if p in ids]
+    if selected:
+        print("\n".join(selected))
+        return 0
+    fallback = [x for x in ids if x.startswith("bedrock-")]
+    print("\n".join(fallback))
+    return 0
+
+
+def cmd_select_bedrock_anthropic_model() -> int:
+    """Read /v1/models JSON on stdin; print the preferred Anthropic-on-Bedrock model alias."""
+    raw = sys.stdin.read().strip()
+    try:
+        data = json.loads(raw).get("data", [])
+    except Exception:
+        return 0
+    ids = [m.get("id", "") for m in data if isinstance(m, dict)]
+    preferred = [
+        "bedrock-eu-anthropic-claude-haiku-4-5-20251001-v1-0",
+        "bedrock-global-anthropic-claude-haiku-4-5-20251001-v1-0",
+        "bedrock-eu-anthropic-claude-sonnet-4-5-20250929-v1-0",
+        "bedrock-global-anthropic-claude-sonnet-4-5-20250929-v1-0",
+    ]
+    for p in preferred:
+        if p in ids:
+            print(p)
+            return 0
+    for x in ids:
+        if x.startswith("bedrock-") and "anthropic" in x:
+            print(x)
+            return 0
+    return 0
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print("usage: headroom_python.py <subcommand> [args...]", file=sys.stderr)
@@ -1073,6 +1271,17 @@ def main() -> int:
     if sub == "generate-config" and len(args) in (2, 3):
         token_file = args[2] if len(args) == 3 else ""
         return cmd_generate_config(args[0], args[1], token_file)
+
+    if sub == "build-bedrock-compression-payload" and len(args) == 1:
+        return cmd_build_bedrock_compression_payload(args[0])
+    if sub == "build-copilot-cache-payload" and len(args) == 2:
+        return cmd_build_copilot_cache_payload(args[0], args[1])
+    if sub == "build-copilot-compression-payload" and len(args) == 2:
+        return cmd_build_copilot_compression_payload(args[0], args[1])
+    if sub == "select-bedrock-model" and len(args) == 0:
+        return cmd_select_bedrock_model()
+    if sub == "select-bedrock-anthropic-model" and len(args) == 0:
+        return cmd_select_bedrock_anthropic_model()
 
     print(f"invalid arguments for subcommand: {sub}", file=sys.stderr)
     return 1

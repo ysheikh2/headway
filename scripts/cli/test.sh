@@ -148,64 +148,7 @@ run_bedrock_converse_compression_probe() {
   local payload_file
 
   payload_file=$(make_tmp)
-  python3 - "$payload_file" <<'PY'
-import json
-import sys
-import time
-
-out = sys.argv[1]
-# Unique per run so the CompressionCache never returns a cached result —
-# each test run must exercise the full compression pipeline.
-probe_run_id = int(time.time() * 1000)
-# Large repetitive payload — cycles through 25 unique items.
-arr = [
-    {
-        "id": i % 25,
-        "name": f"item{i % 25}",
-        "status": "ok",
-        "count": i,
-        "payload": "x" * 80,
-        "run": probe_run_id,
-    }
-    for i in range(2000)
-]
-# Build a realistic multi-turn conversation. SmartCrusher (max_items_after_crush=8)
-# only activates when non-protected messages > 8. With protect_recent=2 and 14 total
-# messages, non-protected = 12 > 8, so SmartCrusher drops the oldest 4 messages
-# (including the big toolResult at index 2) → measurable token savings.
-msgs = [
-    # Turn 0 — old, will be crushed
-    {"role": "user", "content": [{"type": "text", "text": "Start the analysis."}]},
-    {
-        "role": "assistant",
-        "content": [{"toolUse": {"toolUseId": "toolu_probe_42", "name": "custom_fetch", "input": {"q": "all"}}}],
-    },
-    # Big tool result in earliest history (index 2 of 14 — far outside protect window)
-    {
-        "role": "user",
-        "content": [{"toolResult": {"toolUseId": "toolu_probe_42", "content": [{"json": arr}]}}],
-    },
-    {"role": "assistant", "content": [{"type": "text", "text": "Data fetched. Reviewing."}]},
-    # Turn 2
-    {"role": "user", "content": [{"type": "text", "text": "Any errors?"}]},
-    {"role": "assistant", "content": [{"type": "text", "text": "No errors found."}]},
-    # Turn 3
-    {"role": "user", "content": [{"type": "text", "text": "Check the totals."}]},
-    {"role": "assistant", "content": [{"type": "text", "text": "Totals look correct."}]},
-    # Turn 4
-    {"role": "user", "content": [{"type": "text", "text": "What about the averages?"}]},
-    {"role": "assistant", "content": [{"type": "text", "text": "Averages are within range."}]},
-    # Turn 5
-    {"role": "user", "content": [{"type": "text", "text": "Anything else to check?"}]},
-    {"role": "assistant", "content": [{"type": "text", "text": "All checks passed."}]},
-    # Recent protected (last 2 messages with protect_recent=2)
-    {"role": "user", "content": [{"type": "text", "text": "Summarize in one short line."}]},
-    {"role": "assistant", "content": [{"type": "text", "text": "Ready."}]},
-]
-payload = {"messages": msgs, "inferenceConfig": {"maxTokens": 32}}
-with open(out, "w", encoding="utf-8") as f:
-    f.write(json.dumps(payload, separators=(",", ":")))
-PY
+  python3 "$DIR/scripts/cli/headroom_python.py" build-bedrock-compression-payload "$payload_file"
 
   HTTP_CODE=$(curl -s -o "$outfile" -w "%{http_code}" --max-time 90 \
     "$base_url/model/$model/converse" \
@@ -272,26 +215,7 @@ run_copilot_cache_probe() {
   local model="$2"
   local payload_file
   payload_file=$(make_tmp)
-  python3 - "$payload_file" "$model" <<'PY'
-import json, sys
-out, model = sys.argv[1], sys.argv[2]
-arr = [{"id": i % 25, "name": f"item{i % 25}", "status": "ok", "count": i,
-        "payload": "x" * 60} for i in range(500)]
-big = json.dumps(arr)
-msgs = [
-    {"role": "user", "content": "Analyze this dataset and remember it."},
-    {"role": "assistant", "content": None,
-     "tool_calls": [{"id": "call_cache", "type": "function",
-                     "function": {"name": "fetch", "arguments": "{}"}}]},
-    {"role": "tool", "tool_call_id": "call_cache", "content": big},
-    {"role": "assistant", "content": "Loaded."},
-    {"role": "user", "content": "Ready?"},
-    {"role": "assistant", "content": "Yes."},
-]
-with open(out, "w", encoding="utf-8") as f:
-    f.write(json.dumps({"model": model, "messages": msgs, "max_tokens": 8, "stream": False},
-                       separators=(",", ":")))
-PY
+  python3 "$DIR/scripts/cli/headroom_python.py" build-copilot-cache-payload "$payload_file" "$model"
   local n
   for n in 1 2; do
     HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 \
@@ -312,42 +236,7 @@ run_copilot_compression_probe() {
   local outfile="$3"
   local payload_file
   payload_file=$(make_tmp)
-  python3 - "$payload_file" "$model" <<'PY'
-import json, sys, time
-
-out, model = sys.argv[1], sys.argv[2]
-# Unique per run so the CompressionCache never short-circuits the pipeline.
-run_id = int(time.time() * 1000)
-arr = [
-    {"id": i % 25, "name": f"item{i % 25}", "status": "ok", "count": i,
-     "payload": "x" * 80, "run": run_id}
-    for i in range(1200)
-]
-big = json.dumps(arr)
-msgs = [
-    {"role": "user", "content": "Start the analysis."},
-    {"role": "assistant", "content": None,
-     "tool_calls": [{"id": "call_probe_42", "type": "function",
-                     "function": {"name": "custom_fetch", "arguments": "{\"q\":\"all\"}"}}]},
-    # Big stale tool result (index 2 of 14 — outside protect_recent=2).
-    {"role": "tool", "tool_call_id": "call_probe_42", "content": big},
-    {"role": "assistant", "content": "Data fetched. Reviewing."},
-    {"role": "user", "content": "Any errors?"},
-    {"role": "assistant", "content": "No errors found."},
-    {"role": "user", "content": "Check the totals."},
-    {"role": "assistant", "content": "Totals look correct."},
-    {"role": "user", "content": "What about the averages?"},
-    {"role": "assistant", "content": "Averages are within range."},
-    {"role": "user", "content": "Anything else to check?"},
-    {"role": "assistant", "content": "All checks passed."},
-    # Recent protected (last 2).
-    {"role": "user", "content": "Summarize in one short line."},
-    {"role": "assistant", "content": "Ready."},
-]
-payload = {"model": model, "messages": msgs, "max_tokens": 16, "stream": False}
-with open(out, "w", encoding="utf-8") as f:
-    f.write(json.dumps(payload, separators=(",", ":")))
-PY
+  python3 "$DIR/scripts/cli/headroom_python.py" build-copilot-compression-payload "$payload_file" "$model"
 
   HTTP_CODE=$(curl -s -o "$outfile" -w "%{http_code}" --max-time 60 \
     "$base_url/v1/chat/completions" \
@@ -648,62 +537,9 @@ fi
 echo
 
 # --- Test 5: Bedrock end-to-end ---
-BEDROCK_CANDIDATES=$(echo "$MODELS" | python3 -c "
-import json,sys
-try:
-    data=json.load(sys.stdin).get('data',[])
-except Exception:
-    print('')
-    raise SystemExit(0)
-ids=[m.get('id','') for m in data]
+BEDROCK_CANDIDATES=$(echo "$MODELS" | python3 "$DIR/scripts/cli/headroom_python.py" select-bedrock-model 2>/dev/null || echo "")
 
-# Prefer explicitly cheapest aliases from current AWS Pricing + current alias inventory.
-preferred=[
-  'bedrock-mistral-voxtral-mini-3b-2507',
-  'bedrock-google-gemma-3-4b-it',
-  'bedrock-mistral-ministral-3-3b-instruct',
-  'bedrock-eu-amazon-nova-micro-v1-0',
-  'bedrock-eu-amazon-nova-2-lite-v1-0',
-  'bedrock-global-amazon-nova-2-lite-v1-0',
-  'bedrock-eu-amazon-nova-lite-v1-0',
-  'bedrock-openai-gpt-oss-20b-1-0',
-  'bedrock-eu-anthropic-claude-haiku-4-5-20251001-v1-0',
-  'bedrock-global-anthropic-claude-haiku-4-5-20251001-v1-0',
-]
-selected=[p for p in preferred if p in ids]
-if selected:
-    print('\\n'.join(selected))
-    raise SystemExit(0)
-
-# Fallback: any bedrock alias in the model list.
-fallback=[x for x in ids if x.startswith('bedrock-')]
-print('\\n'.join(fallback))
-" 2>/dev/null || echo "")
-
-BEDROCK_ANTHROPIC_TEST_MODEL=$(echo "$MODELS" | python3 -c "
-import json,sys
-try:
-    data=json.load(sys.stdin).get('data',[])
-except Exception:
-    print('')
-    raise SystemExit(0)
-ids=[m.get('id','') for m in data]
-preferred=[
-  'bedrock-eu-anthropic-claude-haiku-4-5-20251001-v1-0',
-  'bedrock-global-anthropic-claude-haiku-4-5-20251001-v1-0',
-  'bedrock-eu-anthropic-claude-sonnet-4-5-20250929-v1-0',
-  'bedrock-global-anthropic-claude-sonnet-4-5-20250929-v1-0',
-]
-for p in preferred:
-    if p in ids:
-        print(p)
-        raise SystemExit(0)
-for x in ids:
-    if x.startswith('bedrock-') and 'anthropic' in x:
-        print(x)
-        raise SystemExit(0)
-print('')
-" 2>/dev/null || echo "")
+BEDROCK_ANTHROPIC_TEST_MODEL=$(echo "$MODELS" | python3 "$DIR/scripts/cli/headroom_python.py" select-bedrock-anthropic-model 2>/dev/null || echo "")
 
 BEDROCK_TEST_MODEL=""
 if [[ -z "$BEDROCK_CANDIDATES" ]]; then
