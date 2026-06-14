@@ -10,6 +10,77 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import urlopen
 
+# Pricing is loaded lazily from the models.dev cache synced by `./headway up/update/stats`.
+# Path inside the container via the .data/headroom volume mount.
+_MODELS_DEV_CACHE_PATH = os.getenv("HEADWAY_MODELS_DEV_CACHE", "/home/nonroot/.headroom/models-dev.json")
+_models_dev_pricing_cache: dict[str, tuple[float, float]] | None = None
+
+
+def _load_models_dev_pricing() -> dict[str, tuple[float, float]]:
+    """Load {normalized_model_id: (in_price_per_tok, out_price_per_tok)} from local cache."""
+    global _models_dev_pricing_cache
+    if _models_dev_pricing_cache is not None:
+        return _models_dev_pricing_cache
+
+    result: dict[str, tuple[float, float]] = {}
+    try:
+        with open(_MODELS_DEV_CACHE_PATH) as fh:
+            data = json.load(fh)
+    except Exception:
+        _models_dev_pricing_cache = result
+        return result
+
+    if not isinstance(data, dict):
+        _models_dev_pricing_cache = result
+        return result
+
+    for _provider, pdata in data.items():
+        if not isinstance(pdata, dict):
+            continue
+        models = pdata.get("models")
+        if not isinstance(models, dict):
+            continue
+        for model_id, mdata in models.items():
+            if not isinstance(mdata, dict):
+                continue
+            cost = mdata.get("cost")
+            if not isinstance(cost, dict):
+                continue
+            in_c = cost.get("input")
+            out_c = cost.get("output")
+            if not (isinstance(in_c, (int, float)) and isinstance(out_c, (int, float))):
+                continue
+            # Normalize: lowercase, drop version qualifier after ":"
+            norm = model_id.lower().split(":")[0]
+            result[norm] = (float(in_c) / 1_000_000, float(out_c) / 1_000_000)
+
+    _models_dev_pricing_cache = result
+    return result
+
+
+def _lookup_price(display_model: str) -> tuple[float, float] | None:
+    """Return (input_price_per_tok, output_price_per_tok) from the models.dev cache, or None."""
+    pricing = _load_models_dev_pricing()
+    if not pricing:
+        return None
+
+    key = display_model.lower().split(":")[0]
+
+    if key in pricing:
+        return pricing[key]
+
+    # Substring match: the display model id and stored ids may differ by region prefix or
+    # version suffix. Pick the longest matching stored id (most specific).
+    best: tuple[float, float] | None = None
+    best_len = 0
+    for model_id, price in pricing.items():
+        if model_id in key or key in model_id:
+            if len(model_id) > best_len:
+                best = price
+                best_len = len(model_id)
+
+    return best
+
 
 @dataclass
 class _BedrockStats:
@@ -153,8 +224,36 @@ def _build_bedrock_stats() -> _BedrockStats:
     )
 
 
+def _build_bedrock_shim_stats() -> dict[str, Any] | None:
+    try:
+        from headroom_patch import bedrock_native_patch
+
+        payload = bedrock_native_patch.snapshot_stats()
+    except Exception:
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
 def _as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _display_model_name(model_id: str) -> str:
+    model = (model_id or "unknown").strip()
+    if not model:
+        return "unknown"
+    # Bedrock model ids may include region/vendor prefix and version suffix.
+    # Keep a readable dashboard label while preserving full id in tags.
+    if model.startswith("eu.") or model.startswith("us.") or model.startswith("ap."):
+        parts = model.split(".")
+        if len(parts) >= 3:
+            model = ".".join(parts[2:])
+    if ":" in model:
+        model = model.split(":", 1)[0]
+    return model
 
 
 def _merge_unified_stats(base: dict[str, Any], bedrock: _BedrockStats) -> dict[str, Any]:
@@ -200,6 +299,39 @@ def _merge_unified_stats(base: dict[str, Any], bedrock: _BedrockStats) -> dict[s
         },
     }
 
+    shim = _build_bedrock_shim_stats()
+    if isinstance(shim, dict):
+        saved = _to_int(shim.get("tokens_saved"))
+        comp_saved = saved
+        api = _to_int(shim.get("api_requests"))
+        failed = _to_int(shim.get("failed_requests"))
+        cached = _to_int((_as_dict(shim.get("cache"))).get("hits"))
+        # snapshot_stats() returns flat asdict() fields: tokens_before, tokens_after, output_tokens
+        input_toks = _to_int(shim.get("tokens_before"))
+        output_toks = _to_int(shim.get("output_tokens"))
+        tokens_after = _to_int(shim.get("tokens_after"))
+        avg_compression_pct = (
+            100.0 * saved / (saved + tokens_after)
+            if (saved + tokens_after) > 0
+            else 0.0
+        )
+
+        lanes["bedrock_native"]["api_requests"] = api
+        lanes["bedrock_native"]["tokens_saved"] = saved
+        lanes["bedrock_native"]["compression_tokens_saved"] = comp_saved
+        lanes["bedrock_native"]["requests_cached"] = cached
+        lanes["bedrock_native"]["requests_failed"] = failed
+        lanes["bedrock_native"]["input_tokens"] = input_toks
+        lanes["bedrock_native"]["output_tokens"] = output_toks
+        lanes["bedrock_native"]["compression_pct"] = round(avg_compression_pct, 2)
+        lanes["bedrock_native"]["shim_stats"] = shim
+
+        unified["api_requests"] = copilot_api + api
+        unified["tokens_saved"] = copilot_saved + saved
+        unified["compression_tokens_saved"] = copilot_comp_saved + comp_saved
+        unified["requests_cached"] = copilot_cached + cached
+        unified["requests_failed"] = copilot_failed + failed
+
     payload["unified"] = unified
     payload["lanes"] = lanes
     payload["raw_unified_sources"] = {
@@ -216,20 +348,194 @@ def _merge_unified_stats(base: dict[str, Any], bedrock: _BedrockStats) -> dict[s
         "unified": unified,
         "lanes": lanes,
     }
+
+    # Surface Bedrock-native shim traffic in dashboard tables even when savings are 0.
+    # This augments (does not replace) copilot-lane stats.
+    if isinstance(shim, dict):
+        by_model = shim.get("by_model") if isinstance(shim.get("by_model"), dict) else {}
+        recent = shim.get("recent_requests") if isinstance(shim.get("recent_requests"), list) else []
+
+        cost_block = _as_dict(payload.get("cost"))
+        per_model = _as_dict(cost_block.get("per_model"))
+
+        # Accumulate Bedrock USD savings to add to the cost block afterwards.
+        bedrock_compression_savings_usd = 0.0
+        bedrock_without_usd = 0.0
+        bedrock_with_usd = 0.0
+
+        for model, row in by_model.items():
+            if not isinstance(row, dict):
+                continue
+            display_model = _display_model_name(str(model))
+            req = _to_int(row.get("requests"))
+            sent = _to_int(row.get("tokens_before"))       # input tokens BEFORE compression
+            after_toks = _to_int(row.get("tokens_after"))  # input tokens AFTER compression
+            saved = _to_int(row.get("tokens_saved"))
+            out_toks = _to_int(row.get("output_tokens", 0))
+            reduction = (100.0 * saved / sent) if sent > 0 else 0.0
+
+            # USD savings estimate using the Anthropic price table.
+            compression_savings_usd = 0.0
+            price = _lookup_price(display_model)
+            if price is not None and saved > 0:
+                in_price, out_price = price
+                compression_savings_usd = saved * in_price
+                bedrock_compression_savings_usd += compression_savings_usd
+                bedrock_without_usd += sent * in_price + out_toks * out_price
+                bedrock_with_usd += after_toks * in_price + out_toks * out_price
+
+            cur = _as_dict(per_model.get(display_model))
+            cur["requests"] = _to_int(cur.get("requests")) + req
+            cur["tokens_sent"] = _to_int(cur.get("tokens_sent")) + sent
+            cur["tokens_saved"] = _to_int(cur.get("tokens_saved")) + saved
+            cur["output_tokens"] = _to_int(cur.get("output_tokens", 0)) + out_toks
+            cur["compression_savings_usd"] = (
+                float(cur.get("compression_savings_usd") or 0.0) + compression_savings_usd
+            )
+            # Recompute aggregate reduction against aggregate totals.
+            total_sent = _to_int(cur.get("tokens_sent"))
+            total_saved_cur = _to_int(cur.get("tokens_saved"))
+            cur["reduction_pct"] = (
+                (100.0 * total_saved_cur / total_sent) if total_sent > 0 else reduction
+            )
+            per_model[display_model] = cur
+
+        cost_block["per_model"] = per_model
+
+        # Merge Bedrock USD savings into the session cost block so the dashboard shows them.
+        if bedrock_compression_savings_usd > 0:
+            cost_block["savings_usd"] = (
+                float(cost_block.get("savings_usd") or 0.0) + bedrock_compression_savings_usd
+            )
+            cost_block["compression_savings_usd"] = (
+                float(cost_block.get("compression_savings_usd") or 0.0)
+                + bedrock_compression_savings_usd
+            )
+
+        payload["cost"] = cost_block
+
+        # Merge into summary.cost so the top-level dashboard metrics also update.
+        summary = _as_dict(payload.get("summary"))
+        sum_cost = _as_dict(summary.get("cost"))
+        if bedrock_compression_savings_usd > 0:
+            sum_cost["total_saved_usd"] = (
+                float(sum_cost.get("total_saved_usd") or 0.0) + bedrock_compression_savings_usd
+            )
+            breakdown = _as_dict(sum_cost.get("breakdown"))
+            breakdown["compression_savings_usd"] = (
+                float(breakdown.get("compression_savings_usd") or 0.0)
+                + bedrock_compression_savings_usd
+            )
+            sum_cost["breakdown"] = breakdown
+            # Recompute without/with totals.
+            sum_cost["without_headroom_usd"] = (
+                float(sum_cost.get("without_headroom_usd") or 0.0) + bedrock_without_usd
+            )
+            sum_cost["with_headroom_usd"] = (
+                float(sum_cost.get("with_headroom_usd") or 0.0) + bedrock_with_usd
+            )
+            tot_without = float(sum_cost.get("without_headroom_usd") or 0.0)
+            tot_saved = float(sum_cost.get("total_saved_usd") or 0.0)
+            sum_cost["savings_pct"] = (
+                round(100.0 * tot_saved / tot_without, 2) if tot_without > 0 else 0.0
+            )
+        summary["cost"] = sum_cost
+        payload["summary"] = summary
+
+        request_logs = payload.get("request_logs") if isinstance(payload.get("request_logs"), list) else []
+        recent_requests = (
+            payload.get("recent_requests") if isinstance(payload.get("recent_requests"), list) else []
+        )
+        for entry in recent:
+            if not isinstance(entry, dict):
+                continue
+            raw_model = str(entry.get("model", "unknown"))
+            display_model = _display_model_name(raw_model)
+            before = _to_int(entry.get("input_tokens_original"))
+            after = _to_int(entry.get("input_tokens_optimized"))
+            out_toks = _to_int(entry.get("output_tokens", 0))
+            saved = _to_int(entry.get("tokens_saved"))
+
+            # Per-request USD estimate for the "savings" column in the request log.
+            req_savings_usd = 0.0
+            req_price = _lookup_price(display_model)
+            if req_price is not None and saved > 0:
+                req_savings_usd = saved * req_price[0]
+
+            req_row = {
+                "request_id": f"bedrock-native-{entry.get('timestamp', '')}",
+                "timestamp": entry.get("timestamp", _utc_now_iso()),
+                "provider": "bedrock_native",
+                "model": display_model,
+                "input_tokens_original": before,
+                "input_tokens_optimized": after,
+                "output_tokens": out_toks,
+                "tokens_saved": saved,
+                "savings_percent": (100.0 * saved / before) if before > 0 else 0.0,
+                "compression_savings_usd": req_savings_usd,
+                "optimization_latency_ms": 0.0,
+                "total_latency_ms": 0.0,
+                "tags": {
+                    "lane": "bedrock_native",
+                    "action": entry.get("action", ""),
+                    "raw_model": raw_model,
+                },
+                "cache_hit": False,
+                "transforms_applied": ["bedrock_native_shim"],
+                "waste_signals": None,
+                "error": "request_failed" if bool(entry.get("failed", False)) else None,
+                "turn_id": None,
+            }
+            request_logs.append(req_row)
+            recent_requests.append(req_row)
+
+        # Keep most recent 500 by timestamp string (ISO-8601 sortable)
+        request_logs.sort(key=lambda r: str(_as_dict(r).get("timestamp", "")))
+        payload["request_logs"] = request_logs[-500:]
+        recent_requests.sort(key=lambda r: str(_as_dict(r).get("timestamp", "")), reverse=True)
+        payload["recent_requests"] = recent_requests[:10]
+
     return payload
+
+
+def _bedrock_compression_savings_usd(shim: dict[str, Any]) -> float:
+    """Sum compression savings USD across all Bedrock native models in shim snapshot."""
+    by_model = shim.get("by_model") if isinstance(shim.get("by_model"), dict) else {}
+    total = 0.0
+    for model, row in by_model.items():
+        if not isinstance(row, dict):
+            continue
+        saved = _to_int(row.get("tokens_saved"))
+        if saved <= 0:
+            continue
+        price = _lookup_price(_display_model_name(str(model)))
+        if price is not None:
+            total += saved * price[0]
+    return total
 
 
 def _merge_unified_history(base: dict[str, Any], bedrock: _BedrockStats) -> dict[str, Any]:
     payload = deepcopy(base)
     lifetime: dict[str, Any] = _as_dict(payload.get("lifetime"))
     payload["lifetime"] = lifetime
-    lifetime["api_requests"] = _to_int(lifetime.get("api_requests")) + bedrock.api_requests
-    lifetime["tokens_saved"] = _to_int(lifetime.get("tokens_saved")) + bedrock.tokens_saved
+    shim = _build_bedrock_shim_stats()
+    bedrock_api = _to_int(shim.get("api_requests")) if isinstance(shim, dict) else bedrock.api_requests
+    bedrock_saved = _to_int(shim.get("tokens_saved")) if isinstance(shim, dict) else bedrock.tokens_saved
+
+    lifetime["api_requests"] = _to_int(lifetime.get("api_requests")) + bedrock_api
+    lifetime["tokens_saved"] = _to_int(lifetime.get("tokens_saved")) + bedrock_saved
 
     display: dict[str, Any] = _as_dict(payload.get("display_session"))
     payload["display_session"] = display
-    display["requests"] = _to_int(display.get("requests")) + bedrock.api_requests
-    display["tokens_saved"] = _to_int(display.get("tokens_saved")) + bedrock.tokens_saved
+    display["requests"] = _to_int(display.get("requests")) + bedrock_api
+    display["tokens_saved"] = _to_int(display.get("tokens_saved")) + bedrock_saved
+
+    if isinstance(shim, dict):
+        bedrock_usd = _bedrock_compression_savings_usd(shim)
+        if bedrock_usd > 0:
+            display["compression_savings_usd"] = (
+                float(display.get("compression_savings_usd") or 0.0) + bedrock_usd
+            )
 
     payload.setdefault("unified_history", {})
     payload["unified_history"] = {
@@ -239,6 +545,7 @@ def _merge_unified_history(base: dict[str, Any], bedrock: _BedrockStats) -> dict
             "error": bedrock.error,
             "api_requests": bedrock.api_requests,
             "tokens_saved": bedrock.tokens_saved,
+            "shim_stats": shim,
         }
     }
     return payload

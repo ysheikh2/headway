@@ -63,7 +63,7 @@ run_chat_completion() {
   local max_tokens="$4"
   local outfile="$5"
 
-  HTTP_CODE=$(curl -s -o "$outfile" -w "%{http_code}" --max-time 50 \
+  HTTP_CODE=$(curl -s -o "$outfile" -w "%{http_code}" --max-time 15 \
     "$base_url/v1/chat/completions" \
     -H "Content-Type: application/json" \
     -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"$prompt\"}],\"max_tokens\":$max_tokens,\"stream\":false}" \
@@ -132,12 +132,99 @@ run_bedrock_converse() {
   local request_id="$5"
 
   # Bedrock Converse API format: content items need "type"+"text" keys (not just "text").
-  HTTP_CODE=$(curl -s -o "$outfile" -w "%{http_code}" --max-time 60 \
+  HTTP_CODE=$(curl -s -o "$outfile" -w "%{http_code}" --max-time 25 \
     "$base_url/model/$model/converse" \
     -H "Content-Type: application/json" \
     -H "x-request-id: $request_id" \
     -d "{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"$prompt\"}]}],\"inferenceConfig\":{\"maxTokens\":32}}" \
     2>/dev/null || echo "000")
+}
+
+run_bedrock_converse_compression_probe() {
+  local base_url="$1"
+  local model="$2"
+  local outfile="$3"
+  local request_id="$4"
+  local payload_file
+
+  payload_file=$(make_tmp)
+  python3 - "$payload_file" <<'PY'
+import json
+import sys
+import time
+
+out = sys.argv[1]
+# Unique per run so the CompressionCache never returns a cached result —
+# each test run must exercise the full compression pipeline.
+probe_run_id = int(time.time() * 1000)
+# Large repetitive payload — cycles through 25 unique items.
+arr = [
+    {
+        "id": i % 25,
+        "name": f"item{i % 25}",
+        "status": "ok",
+        "count": i,
+        "payload": "x" * 80,
+        "run": probe_run_id,
+    }
+    for i in range(2000)
+]
+# Build a realistic multi-turn conversation. SmartCrusher (max_items_after_crush=8)
+# only activates when non-protected messages > 8. With protect_recent=2 and 14 total
+# messages, non-protected = 12 > 8, so SmartCrusher drops the oldest 4 messages
+# (including the big toolResult at index 2) → measurable token savings.
+msgs = [
+    # Turn 0 — old, will be crushed
+    {"role": "user", "content": [{"type": "text", "text": "Start the analysis."}]},
+    {
+        "role": "assistant",
+        "content": [{"toolUse": {"toolUseId": "toolu_probe_42", "name": "custom_fetch", "input": {"q": "all"}}}],
+    },
+    # Big tool result in earliest history (index 2 of 14 — far outside protect window)
+    {
+        "role": "user",
+        "content": [{"toolResult": {"toolUseId": "toolu_probe_42", "content": [{"json": arr}]}}],
+    },
+    {"role": "assistant", "content": [{"type": "text", "text": "Data fetched. Reviewing."}]},
+    # Turn 2
+    {"role": "user", "content": [{"type": "text", "text": "Any errors?"}]},
+    {"role": "assistant", "content": [{"type": "text", "text": "No errors found."}]},
+    # Turn 3
+    {"role": "user", "content": [{"type": "text", "text": "Check the totals."}]},
+    {"role": "assistant", "content": [{"type": "text", "text": "Totals look correct."}]},
+    # Turn 4
+    {"role": "user", "content": [{"type": "text", "text": "What about the averages?"}]},
+    {"role": "assistant", "content": [{"type": "text", "text": "Averages are within range."}]},
+    # Turn 5
+    {"role": "user", "content": [{"type": "text", "text": "Anything else to check?"}]},
+    {"role": "assistant", "content": [{"type": "text", "text": "All checks passed."}]},
+    # Recent protected (last 2 messages with protect_recent=2)
+    {"role": "user", "content": [{"type": "text", "text": "Summarize in one short line."}]},
+    {"role": "assistant", "content": [{"type": "text", "text": "Ready."}]},
+]
+payload = {"messages": msgs, "inferenceConfig": {"maxTokens": 32}}
+with open(out, "w", encoding="utf-8") as f:
+    f.write(json.dumps(payload, separators=(",", ":")))
+PY
+
+  HTTP_CODE=$(curl -s -o "$outfile" -w "%{http_code}" --max-time 90 \
+    "$base_url/model/$model/converse" \
+    -H "Content-Type: application/json" \
+    -H "x-request-id: $request_id" \
+    --data-binary @"$payload_file" \
+    2>/dev/null || echo "000")
+}
+
+get_bedrock_native_saved_tokens() {
+  local base_url="$1"
+  curl -s --max-time 8 "$base_url/bedrock-native/stats" | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    print(int((d.get("tokens") or {}).get("saved",0)))
+except Exception:
+    print(0)
+'
 }
 
 run_bedrock_converse_stream() {
@@ -150,7 +237,7 @@ run_bedrock_converse_stream() {
   # Use EventStream Accept to get raw passthrough bytes — the SSE translator only
   # handles InvokeModel "chunk" events, not Converse stream event types.
   # EventStream passthrough confirms the route + SigV4 + upstream are all working.
-  HTTP_CODE=$(curl -s -o "$outfile" -w "%{http_code}" --max-time 60 \
+  HTTP_CODE=$(curl -s -o "$outfile" -w "%{http_code}" --max-time 25 \
     "$base_url/model/$model/converse-stream" \
     -H "Content-Type: application/json" \
     -H "Accept: application/vnd.amazon.eventstream" \
@@ -191,19 +278,55 @@ trap cleanup EXIT
 echo "=== Headway Gateway — Smoke Tests ==="
 echo
 
+# --- Preflight: Copilot auth check ---
+# Detect a pending GitHub device-code auth early so tests fail fast instead of
+# waiting through 25 s × 3 retries × N model candidates.
+COPILOT_DEVICE_CODE=$(docker logs litellm-gateway 2>/dev/null \
+  | grep -E 'Please visit https://github.com/login/device and enter code' \
+  | tail -1 || true)
+if [[ -n "$COPILOT_DEVICE_CODE" ]]; then
+  echo "[WARN] Copilot device auth is pending — complete it before testing:"
+  echo "       $COPILOT_DEVICE_CODE"
+  echo "       Open: https://github.com/login/device"
+  echo "       Then run: ./headway auth"
+  echo
+fi
+
+# --- Preflight: allow headroom-gateway prewarm on fresh start ---
+# The Kompress ONNX model cold-load takes ~30 s. If the gateway has been up
+# for less than 90 s, pause briefly so the prewarm thread finishes before the
+# compression probe runs (avoids spurious timeouts immediately after a restart).
+HEADROOM_UPTIME=$(docker inspect headroom-gateway --format '{{.State.StartedAt}}' 2>/dev/null | \
+  python3 -c "
+import sys, datetime
+try:
+    ts = sys.stdin.read().strip()
+    started = datetime.datetime.fromisoformat(ts.replace('Z','+00:00'))
+    now = datetime.datetime.now(datetime.timezone.utc)
+    print(int((now - started).total_seconds()))
+except Exception:
+    print(9999)
+" 2>/dev/null || echo 9999)
+if [[ "${HEADROOM_UPTIME:-9999}" -lt 90 ]]; then
+  WAIT_SECS=$((90 - HEADROOM_UPTIME))
+  echo "[ Preflight: headroom-gateway started ${HEADROOM_UPTIME}s ago; waiting ${WAIT_SECS}s for prewarm ]"
+  sleep "$WAIT_SECS"
+  echo
+fi
+
 # --- Test 2b: Bedrock headroom liveness (:4002) ---
 echo "[ Test 2b: Bedrock headroom gateway liveness ]"
-BEDROCK_LIVE=$(curl_with_retries "$BEDROCK_NATIVE_GATEWAY/healthz" 6 1 || true)
+BEDROCK_LIVE=$(curl_with_retries "$BEDROCK_NATIVE_GATEWAY/livez" 3 1 || true)
 if [[ -n "$BEDROCK_LIVE" ]]; then
   ok "Bedrock headroom liveness responded: $BEDROCK_LIVE"
 else
-  fail "Bedrock headroom liveness unreachable at $BEDROCK_NATIVE_GATEWAY/healthz"
+  fail "Bedrock headroom liveness unreachable at $BEDROCK_NATIVE_GATEWAY/livez"
   info "Fix: ./headway up"
 fi
 echo
 
 echo "[ Preflight: wait gateway readiness ]"
-if curl_with_retries "$GATEWAY/livez" 20 1 >/dev/null; then
+if curl_with_retries "$GATEWAY/livez" 5 1 >/dev/null; then
   ok "Gateway responded on /livez"
 else
   fail "Gateway did not become ready on /livez"
@@ -226,7 +349,7 @@ echo
 
 # --- Test 2: Liveness ---
 echo "[ Test 2: Gateway liveness ]"
-LIVE=$(curl_with_retries "$GATEWAY/livez" 6 1 || true)
+LIVE=$(curl_with_retries "$GATEWAY/livez" 3 1 || true)
 if [[ -n "$LIVE" ]]; then
   ok "Liveness responded: $LIVE"
 else
@@ -304,13 +427,14 @@ while IFS= read -r CANDIDATE; do
 
   for ATTEMPT in 1 2 3; do
     [[ $ATTEMPT -gt 1 ]] && {
-      echo "  Retrying Copilot request in 5s (attempt $ATTEMPT/3, model $COPILOT_TEST_MODEL)..."
-      sleep 5
+      echo "  Retrying Copilot request in 2s (attempt $ATTEMPT/3, model $COPILOT_TEST_MODEL)..."
+      sleep 2
     }
 
     run_chat_completion "$GATEWAY" "$COPILOT_TEST_MODEL" "Reply with single word: COPILOTOK" 10 "$TMPFILE"
 
-    [[ "$HTTP_CODE" != "502" && "$HTTP_CODE" != "429" ]] && break
+    # Only retry on transient gateway errors; auth failures and timeouts should not be retried.
+    [[ "$HTTP_CODE" == "502" || "$HTTP_CODE" == "429" ]] || break
   done
 
   if [[ "$HTTP_CODE" == "200" ]]; then
@@ -348,7 +472,7 @@ fi
 echo
 
 # --- Test 5: Bedrock end-to-end ---
-BEDROCK_TEST_MODEL=$(echo "$MODELS" | python3 -c "
+BEDROCK_CANDIDATES=$(echo "$MODELS" | python3 -c "
 import json,sys
 try:
     data=json.load(sys.stdin).get('data',[])
@@ -370,11 +494,14 @@ preferred=[
   'bedrock-eu-anthropic-claude-haiku-4-5-20251001-v1-0',
   'bedrock-global-anthropic-claude-haiku-4-5-20251001-v1-0',
 ]
-for p in preferred:
-    if p in ids:
-        print(p)
-        raise SystemExit(0)
-print('')
+selected=[p for p in preferred if p in ids]
+if selected:
+    print('\\n'.join(selected))
+    raise SystemExit(0)
+
+# Fallback: any bedrock alias in the model list.
+fallback=[x for x in ids if x.startswith('bedrock-')]
+print('\\n'.join(fallback))
 " 2>/dev/null || echo "")
 
 BEDROCK_ANTHROPIC_TEST_MODEL=$(echo "$MODELS" | python3 -c "
@@ -402,21 +529,61 @@ for x in ids:
 print('')
 " 2>/dev/null || echo "")
 
-if [[ -z "$BEDROCK_TEST_MODEL" ]]; then
+BEDROCK_TEST_MODEL=""
+if [[ -z "$BEDROCK_CANDIDATES" ]]; then
   fail "No bedrock-* model aliases found in /v1/models"
   info "Fix: ./headway up --regen-config"
   echo
 else
-  echo "[ Test 5: AWS Bedrock end-to-end (lowest-cost model preferred: $BEDROCK_TEST_MODEL) ]"
+  echo "[ Test 5: AWS Bedrock end-to-end (lowest-cost model preferred) ]"
   TMPFILE=$(make_tmp)
-  run_chat_completion "$GATEWAY" "$BEDROCK_TEST_MODEL" "Reply with the single word: BEDROCKOK" 8 "$TMPFILE"
+  LAST_BEDROCK_ERR=""
 
-  if [[ "$HTTP_CODE" == "200" ]] && response_has_choices "$TMPFILE"; then
-    CONTENT=$(response_first_content "$TMPFILE")
-    ok "Bedrock response: \"$CONTENT\" (HTTP $HTTP_CODE)"
+  while IFS= read -r CANDIDATE; do
+    [[ -z "$CANDIDATE" ]] && continue
+    BEDROCK_TEST_MODEL="$CANDIDATE"
+
+    for ATTEMPT in 1 2 3; do
+      [[ $ATTEMPT -gt 1 ]] && {
+        echo "  Retrying Bedrock request in 2s (attempt $ATTEMPT/3, model $BEDROCK_TEST_MODEL)..."
+        sleep 2
+      }
+      run_chat_completion "$GATEWAY" "$BEDROCK_TEST_MODEL" "Reply with the single word: BEDROCKOK" 8 "$TMPFILE"
+      [[ "$HTTP_CODE" == "502" || "$HTTP_CODE" == "429" ]] || break
+    done
+
+    if [[ "$HTTP_CODE" == "200" ]] && response_has_choices "$TMPFILE"; then
+      CONTENT=$(response_first_content "$TMPFILE")
+      ok "Bedrock response using $BEDROCK_TEST_MODEL: \"$CONTENT\" (HTTP $HTTP_CODE)"
+      break
+    fi
+
+    LAST_BEDROCK_ERR=$(python3 -c "import json; d=json.load(open('$TMPFILE')); print(str(d).lower()[:500])" 2>/dev/null || tr '[:upper:]' '[:lower:]' <"$TMPFILE" | head -c 500)
+    if [[ "$HTTP_CODE" == "000" ]]; then
+      echo "  No response from gateway (HTTP 000) — AWS credentials likely expired or request timed out"
+      echo "  Fix: ./headway auth"
+      BEDROCK_TEST_MODEL=""
+      break
+    fi
+    if [[ "$HTTP_CODE" == "429" || "$HTTP_CODE" == "502" || "$HTTP_CODE" == "503" || "$HTTP_CODE" == "504" ]]; then
+      echo "  Bedrock transient failure for $BEDROCK_TEST_MODEL (HTTP $HTTP_CODE); trying next candidate"
+      BEDROCK_TEST_MODEL=""
+      continue
+    fi
+    if echo "$LAST_BEDROCK_ERR" | grep -Eq "model|not found|unsupported|does not exist|accessdenied|not authorized|validationexception|unrecognized"; then
+      echo "  Bedrock model not usable via LiteLLM route: $BEDROCK_TEST_MODEL (trying next candidate)"
+      BEDROCK_TEST_MODEL=""
+      continue
+    fi
+
+    BEDROCK_TEST_MODEL=""
+    break
+  done <<<"$BEDROCK_CANDIDATES"
+
+  if [[ -n "$BEDROCK_TEST_MODEL" ]]; then
+    :
   else
-    ERR=$(python3 -c "import json; d=json.load(open('$TMPFILE')); print(str(d)[:200])" 2>/dev/null || head -c 200 "$TMPFILE")
-    fail "Bedrock request failed (HTTP $HTTP_CODE): $ERR"
+    fail "Bedrock request failed across candidates (last HTTP ${HTTP_CODE:-000}): ${LAST_BEDROCK_ERR:-unknown error}"
     info "AWS credentials issue? Run: aws sso login --profile ${BEDROCK_AWS_PROFILE:-default}"
   fi
 fi
@@ -424,14 +591,22 @@ echo
 
 # --- Test 5b: Bedrock native Converse + ConverseStream via :4002 ---
 echo "[ Test 5b: Bedrock native Converse + ConverseStream via :4002 ]"
-if [[ -z "$BEDROCK_TEST_MODEL" ]]; then
+BEDROCK_NATIVE_ALIAS="$BEDROCK_TEST_MODEL"
+if [[ -z "$BEDROCK_NATIVE_ALIAS" ]]; then
+  while IFS= read -r CANDIDATE; do
+    [[ -n "$CANDIDATE" ]] || continue
+    BEDROCK_NATIVE_ALIAS="$CANDIDATE"
+    break
+  done <<<"$BEDROCK_CANDIDATES"
+fi
+
+if [[ -z "$BEDROCK_NATIVE_ALIAS" ]]; then
   fail "No bedrock-* model found in :4001 model list — cannot run Test 5b"
   info "Fix: ./headway up"
 elif ! bedrock_native_routes_available "$BEDROCK_NATIVE_GATEWAY"; then
   fail "Bedrock :4002 does not expose native /model/{id}/converse routes"
   info "Image lacks native Bedrock route surface; set HEADROOM_BEDROCK_IMAGE to a native bedrock image and restart"
 else
-  BEDROCK_NATIVE_ALIAS="$BEDROCK_TEST_MODEL"
   RESOLVED=$(resolve_bedrock_native_model "$BEDROCK_NATIVE_ALIAS")
   BEDROCK_NATIVE_MODEL=$(echo "$RESOLVED" | awk '{print $1}')
   if [[ -z "$BEDROCK_NATIVE_MODEL" ]]; then
@@ -481,10 +656,45 @@ elif 'output' in d:
       else
         ok "Bedrock :4002 converse did not report compression skip/parse errors"
       fi
+
+      # Compression probe: always run with an Anthropic model (compression only applies
+      # to Anthropic models). Use the converse model if it is Anthropic, otherwise fall
+      # back to the stream model (STREAM_CHECK_MODEL, which is always Haiku when available).
+      # This ensures the probe is not silently skipped when the cheapest converse model
+      # is non-Anthropic (e.g. Mistral).
+      PROBE_MODEL=""
+      if [[ $CONVERSE_EXPECT_ANTHROPIC_COMPRESS -eq 1 ]]; then
+        PROBE_MODEL="$BEDROCK_NATIVE_MODEL"
+      elif [[ -n "$STREAM_CHECK_MODEL" ]] && [[ "$STREAM_CHECK_MODEL" == anthropic.* || "$STREAM_CHECK_MODEL" == *.anthropic.* ]]; then
+        PROBE_MODEL="$STREAM_CHECK_MODEL"
+      fi
+      if [[ -n "$PROBE_MODEL" ]]; then
+        TMPFILE=$(make_tmp)
+        PROBE_SAVED_BEFORE=$(get_bedrock_native_saved_tokens "$BEDROCK_NATIVE_GATEWAY")
+        PROBE_REQ_ID="test-bedrock-converse-compress-$(date +%s)-$$"
+        run_bedrock_converse_compression_probe "$BEDROCK_NATIVE_GATEWAY" "$PROBE_MODEL" "$TMPFILE" "$PROBE_REQ_ID"
+        if [[ "$HTTP_CODE" == "200" ]]; then
+          PROBE_SAVED_AFTER=$(get_bedrock_native_saved_tokens "$BEDROCK_NATIVE_GATEWAY")
+          PROBE_DELTA=$((PROBE_SAVED_AFTER - PROBE_SAVED_BEFORE))
+          if [[ "${PROBE_SAVED_AFTER:-0}" -gt "${PROBE_SAVED_BEFORE:-0}" ]]; then
+            ok "Bedrock :4002 compression probe recorded measurable token savings (+${PROBE_DELTA} tokens, total_saved=$PROBE_SAVED_AFTER, model: $PROBE_MODEL)"
+          else
+            fail "Bedrock :4002 compression probe did not increase measured token savings (cumulative before=$PROBE_SAVED_BEFORE after=$PROBE_SAVED_AFTER, model: $PROBE_MODEL)"
+            info "Check /bedrock-native/stats and headroom-gateway logs for patch/compression path"
+          fi
+        else
+          ERR=$(python3 -c "import json; d=json.load(open('$TMPFILE')); print(str(d)[:220])" 2>/dev/null || head -c 220 "$TMPFILE")
+          fail "Bedrock :4002 compression probe failed (HTTP $HTTP_CODE, model: $PROBE_MODEL): $ERR"
+          info "Check /bedrock-native/stats and headroom-gateway logs for patch/compression path"
+        fi
+      fi
     else
       ERR=$(python3 -c "import json; d=json.load(open('$TMPFILE')); print(str(d)[:220])" 2>/dev/null || head -c 220 "$TMPFILE")
       fail "Bedrock :4002 converse failed (HTTP $HTTP_CODE): $ERR"
       info "Check logs: docker logs headroom-bedrock-gateway"
+      echo "         --- recent headroom-bedrock logs ---"
+      docker logs --tail 12 headroom-bedrock-gateway 2>/dev/null | sed 's/^/         /' || true
+      echo "         ---"
     fi
 
     if [[ -n "$STREAM_CHECK_MODEL" ]]; then
@@ -511,6 +721,9 @@ elif 'output' in d:
       ERR=$(python3 -c "import json; d=json.load(open('$TMPFILE')); print(str(d)[:220])" 2>/dev/null || head -c 220 "$TMPFILE")
       fail "Bedrock :4002 converse-stream failed (HTTP $HTTP_CODE, bytes: ${STREAM_BYTES:-0}): $ERR"
       info "Check logs: docker logs headroom-bedrock-gateway"
+      echo "         --- recent headroom-bedrock logs ---"
+      docker logs --tail 12 headroom-bedrock-gateway 2>/dev/null | sed 's/^/         /' || true
+      echo "         ---"
     fi
   fi
 fi

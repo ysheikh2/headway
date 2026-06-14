@@ -31,6 +31,7 @@ from typing import Any
 COPILOT_STATS_URL = "http://127.0.0.1:4000/stats"
 BEDROCK_STATS_URL = "http://127.0.0.1:4002/stats"
 BEDROCK_METRICS_URL = "http://127.0.0.1:4002/metrics"
+BEDROCK_NATIVE_PATCH_STATS_URL = "http://127.0.0.1:4002/bedrock-native/stats"
 
 
 def _strip_jsonc_comments(text: str) -> str:
@@ -391,6 +392,7 @@ def _parse_metrics(text: str) -> dict[str, int]:
 def cmd_combined_stats() -> int:
     copilot, copilot_err = _fetch_json(COPILOT_STATS_URL)
     bedrock, bedrock_err = _fetch_json(BEDROCK_STATS_URL)
+    bedrock_patch_stats, _ = _fetch_json(BEDROCK_NATIVE_PATCH_STATS_URL)
 
     if copilot is None:
         print(
@@ -437,11 +439,20 @@ def cmd_combined_stats() -> int:
         else:
             bedrock_err = bedrock_err or metrics_err
 
+    _bp = bedrock_patch_stats or {}
+    _bd = bedrock or {}
+    _bp_tokens = _bp.get("tokens", {}) if isinstance(_bp.get("tokens"), dict) else {}
+    _bp_summary = _bp.get("summary", {}) if isinstance(_bp.get("summary"), dict) else {}
+    _bp_compression = (
+        _bp_summary.get("compression", {}) if isinstance(_bp_summary.get("compression"), dict) else {}
+    )
     lanes = {
         "copilot": {
             "available": True,
             "endpoint": COPILOT_STATS_URL,
             "api_requests": _int_num(copilot, "summary", "api_requests"),
+            "input_tokens": _int_num(copilot, "tokens", "input"),
+            "output_tokens": _int_num(copilot, "tokens", "output"),
             "tokens_saved": _int_num(copilot, "tokens", "saved"),
             "compression_tokens_saved": _int_num(copilot, "tokens", "proxy_compression_saved"),
             "requests_cached": _int_num(copilot, "requests", "cached"),
@@ -451,13 +462,21 @@ def cmd_combined_stats() -> int:
             "available": bedrock is not None,
             "endpoint": BEDROCK_STATS_URL,
             "error": bedrock_err,
-            "api_requests": _int_num(bedrock or {}, "summary", "api_requests"),
-            "tokens_saved": _int_num(bedrock or {}, "tokens", "saved"),
-            "compression_tokens_saved": _int_num(
-                bedrock or {}, "tokens", "proxy_compression_saved"
-            ),
-            "requests_cached": _int_num(bedrock or {}, "requests", "cached"),
-            "requests_failed": _int_num(bedrock or {}, "requests", "failed"),
+            "api_requests": _int_num(_bp, "summary", "api_requests")
+            or _int_num(_bd, "summary", "api_requests"),
+            "input_tokens": int(_bp_tokens.get("input") or 0),
+            "output_tokens": int(_bp_tokens.get("output") or 0),
+            "tokens_saved": _int_num(_bp, "tokens", "saved")
+            or _int_num(_bd, "tokens", "saved"),
+            "compression_tokens_saved": _int_num(_bp, "tokens", "proxy_compression_saved")
+            or _int_num(_bd, "tokens", "proxy_compression_saved"),
+            "requests_cached": _int_num(_bp, "requests", "cached")
+            or _int_num(_bd, "requests", "cached"),
+            "requests_failed": _int_num(_bp, "requests", "failed")
+            or _int_num(_bd, "requests", "failed"),
+            "compression_pct": float(_bp_compression.get("avg_compression_pct") or 0.0),
+            "compression": _bp_compression,
+            "cache": _bp.get("cache", {}),
         },
     }
 
@@ -479,6 +498,7 @@ def cmd_combined_stats() -> int:
         "raw": {
             "copilot": copilot,
             "bedrock_native": bedrock_metrics_raw if bedrock_metrics_raw is not None else bedrock,
+            "bedrock_native_patch": bedrock_patch_stats,
         },
     }
     print(json.dumps(out))
@@ -536,17 +556,47 @@ def cmd_stats_report(raw_stats: str, raw_history: str, raw_combined: str) -> int
         )
         print(
             "Unified lanes: "
-            f"copilot(saved={copilot_lane.get('tokens_saved', 0)}, cached={copilot_lane.get('requests_cached', 0)}) "
-            f"bedrock(saved={bedrock_lane.get('tokens_saved', 0)}, cached={bedrock_lane.get('requests_cached', 0)})"
+            f"copilot(in={copilot_lane.get('input_tokens', 0)}, out={copilot_lane.get('output_tokens', 0)}, "
+            f"saved={copilot_lane.get('tokens_saved', 0)}, cached={copilot_lane.get('requests_cached', 0)}) "
+            f"bedrock(in={bedrock_lane.get('input_tokens', 0)}, out={bedrock_lane.get('output_tokens', 0)}, "
+            f"saved={bedrock_lane.get('tokens_saved', 0)}, cached={bedrock_lane.get('requests_cached', 0)}, "
+            f"compression={bedrock_lane.get('compression_pct', 0.0):.1f}%)"
         )
+        bedrock_shim = (
+            bedrock_lane.get("shim_stats")
+            if isinstance(bedrock_lane.get("shim_stats"), dict)
+            else {}
+        )
+        if bedrock_shim:
+            print(
+                "Bedrock native shim: "
+                f"api_requests={bedrock_shim.get('api_requests', 0)}, "
+                f"compressed={bedrock_shim.get('compressed_requests', 0)}, "
+                f"tokens_before={bedrock_shim.get('tokens_before', 0)}, "
+                f"tokens_after={bedrock_shim.get('tokens_after', 0)}, "
+                f"tokens_saved={bedrock_shim.get('tokens_saved', 0)}"
+            )
+        bedrock_compression = (
+            bedrock_lane.get("compression", {})
+            if isinstance(bedrock_lane.get("compression"), dict)
+            else {}
+        )
+        if bedrock_compression:
+            print(
+                "Bedrock native compression: "
+                f"requests_compressed={bedrock_compression.get('requests_compressed', 0)}, "
+                f"avg={_fmt_float_pct(bedrock_compression.get('avg_compression_pct'))}, "
+                f"best={_fmt_float_pct(bedrock_compression.get('best_compression_pct'))}, "
+                f"cache_markers_applied={bedrock_compression.get('cache_markers_applied', 0)}"
+            )
         if (
             bedrock_lane.get("available") is True
             and _safe_int(bedrock_lane.get("api_requests")) > 0
             and _safe_int(bedrock_lane.get("tokens_saved")) == 0
         ):
             print(
-                "Bedrock lane note: request counts are visible, but token/cost savings are "
-                "not exposed by current :4002 metrics yet."
+                "Bedrock lane note: requests are reaching :4002, but no net compression "
+                "savings were recorded for this traffic window."
             )
 
     print(f"API requests: {summary.get('api_requests', 0)}")
@@ -676,10 +726,31 @@ def cmd_stats_report(raw_stats: str, raw_history: str, raw_combined: str) -> int
     if isinstance(history, dict) and history.get("display_session"):
         ds = history.get("display_session", {})
         print(f"Session requests: {ds.get('requests', 0)}")
-        print(f"Session tokens saved: {ds.get('tokens_saved', 0)}")
+        session_saved = _safe_int(ds.get("tokens_saved", 0))
+        print(f"Session tokens saved: {session_saved}")
         if isinstance(ds, dict):
             print(f"Session compression USD: {_fmt_usd(ds.get('compression_savings_usd'))}")
-            print(f"Session savings percent: {_fmt_float_pct(ds.get('savings_percent'))}")
+            # Compute savings percent from combined stats if available (copilot-only history
+            # reports 0% when bedrock lane carries the savings).
+            session_pct: float | None = None
+            if isinstance(combined, dict) and combined.get("ok"):
+                lanes = combined.get("lanes", {}) or {}
+                bedrock_lane = lanes.get("bedrock_native", {}) or {}
+                shim = bedrock_lane.get("shim_stats") or {}
+                # snapshot_stats() returns flat fields: tokens_before, tokens_saved
+                bedrock_before = _safe_int(shim.get("tokens_before") or 0)
+                bedrock_saved = _safe_int(shim.get("tokens_saved") or 0)
+                copilot_in = _safe_int(tokens.get("input", 0))
+                copilot_saved = _safe_int(tokens.get("saved", 0))
+                # tokens_before is input BEFORE compression; savings_pct = saved / before
+                total_before = bedrock_before + copilot_in + copilot_saved
+                total_saved_all = bedrock_saved + copilot_saved
+                if total_before > 0 and total_saved_all > 0:
+                    session_pct = round(100.0 * total_saved_all / total_before, 2)
+            if session_pct is None:
+                raw_pct = ds.get("savings_percent")
+                session_pct = float(raw_pct) if isinstance(raw_pct, (int, float)) else 0.0
+            print(f"Session savings percent: {_fmt_float_pct(session_pct)}")
 
     return 0
 

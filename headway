@@ -65,6 +65,28 @@ iter_env_template_pairs() {
   printf '%s\n' "HEADROOM_BEDROCK_IMAGE=$DEFAULT_BEDROCK_IMAGE"
 }
 
+sync_headroom_tuning_env() {
+  # Keep docker-compose behavior and local .env aligned for the copilot lane.
+  # Defaults mirror upstream agent-friendly settings used by headroom wrap:
+  # - compress user messages
+  # - lower minimum token gate so medium tool payloads are compressible
+  # - keep only the last 2 recent read outputs fully protected
+  local k v
+  local keys=(
+    "HEADROOM_COMPRESS_USER_MESSAGES"
+    "HEADROOM_MIN_TOKENS"
+    "HEADROOM_PROTECT_RECENT"
+    "HEADWAY_BEDROCK_AUTO_CACHE_CONTROL"
+  )
+
+  for k in "${keys[@]}"; do
+    v=$(get_env_key "$k")
+    if [[ -n "$v" ]]; then
+      export "$k=$v"
+    fi
+  done
+}
+
 env_template_keys() {
   local pair
   while IFS= read -r pair; do
@@ -310,6 +332,28 @@ generate_config() {
     --output "$ROOT_DIR/litellm_config.yaml"
 }
 
+sync_pricing() {
+  local cache_dir="$ROOT_DIR/.data/headroom"
+  local cache_file="$cache_dir/models-dev.json"
+  local tmp_file="$cache_dir/models-dev.json.tmp.$$"
+  mkdir -p "$cache_dir"
+
+  if curl --silent --max-time 10 --fail \
+      --output "$tmp_file" \
+      "https://models.dev/api.json" 2>/dev/null \
+      && python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$tmp_file" 2>/dev/null; then
+    mv "$tmp_file" "$cache_file"
+    echo "[pricing] cache updated from models.dev"
+  else
+    rm -f "$tmp_file" 2>/dev/null || true
+    if [[ -f "$cache_file" ]]; then
+      echo "[pricing] using cached pricing data"
+    else
+      echo "[pricing] no pricing cache available (network unavailable)"
+    fi
+  fi
+}
+
 print_device_hint() {
   local code_line
   code_line=$(docker logs litellm-gateway 2>/dev/null | grep -E 'Please visit https://github.com/login/device and enter code' | tail -1 || true)
@@ -318,6 +362,19 @@ print_device_hint() {
     echo "  $code_line"
     echo "  Open: https://github.com/login/device"
   fi
+}
+
+check_copilot_auth_hint() {
+  local code_line
+  code_line=$(docker logs litellm-gateway 2>/dev/null | grep -E 'Please visit https://github.com/login/device and enter code' | tail -1 || true)
+  if [[ -n "$code_line" ]]; then
+    echo "WARNING: Copilot device auth is still pending. Complete it before running tests:"
+    echo "  $code_line"
+    echo "  Open: https://github.com/login/device"
+    echo "  Then run: ./headway auth"
+    return 1
+  fi
+  return 0
 }
 
 cmd_init() {
@@ -413,6 +470,7 @@ cmd_up() {
   load_env
   ensure_env_defaults "$aws_profile_override"
   load_env
+  sync_headroom_tuning_env
 
   local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
   if [[ -z "$aws_profile_name" ]]; then
@@ -431,6 +489,7 @@ cmd_up() {
     generate_config "$aws_profile_name" "$discovery_profile"
   fi
 
+  sync_pricing
   compose_pull
   docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
 
@@ -438,11 +497,12 @@ cmd_up() {
     echo "ERROR: gateway did not become healthy at $GATEWAY_URL/livez"
     exit 1
   fi
-  if ! wait_for_http "$BEDROCK_URL/healthz" 30 2 >/dev/null; then
-    echo "ERROR: bedrock lane did not become healthy at $BEDROCK_URL/healthz"
+  if ! wait_for_http "$BEDROCK_URL/livez" 30 2 >/dev/null; then
+    echo "ERROR: bedrock lane did not become healthy at $BEDROCK_URL/livez"
     exit 1
   fi
 
+  print_device_hint
   echo "gateway is up"
 }
 
@@ -473,6 +533,7 @@ cmd_update() {
   load_env
   ensure_env_defaults ""
   load_env
+  sync_headroom_tuning_env
 
   local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
   if [[ -z "$aws_profile_name" ]]; then
@@ -487,6 +548,7 @@ cmd_update() {
     generate_config "$aws_profile_name" "$discovery_profile"
   fi
 
+  sync_pricing
   compose_pull
   docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
 
@@ -494,7 +556,7 @@ cmd_update() {
     echo "ERROR: gateway failed health check after update"
     exit 1
   }
-  wait_for_http "$BEDROCK_URL/healthz" 20 2 >/dev/null || {
+  wait_for_http "$BEDROCK_URL/livez" 20 2 >/dev/null || {
     echo "ERROR: bedrock lane failed health check after update"
     exit 1
   }
@@ -510,6 +572,7 @@ cmd_auth() {
   load_env
   ensure_env_defaults ""
   load_env
+  sync_headroom_tuning_env
 
   local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
   if [[ -z "$aws_profile_name" ]]; then
@@ -546,6 +609,7 @@ cmd_doctor() {
   require_cmd python3
   require_docker
   load_env
+  sync_headroom_tuning_env
 
   echo "=== headway doctor ==="
   echo
@@ -557,7 +621,7 @@ cmd_doctor() {
   echo "[health]"
   local live bedrock
   live=$(curl -sf --max-time 5 "$GATEWAY_URL/livez" 2>/dev/null || true)
-  bedrock=$(curl -sf --max-time 5 "$BEDROCK_URL/healthz" 2>/dev/null || true)
+  bedrock=$(curl -sf --max-time 5 "$BEDROCK_URL/livez" 2>/dev/null || true)
   if [[ -n "$live" ]]; then
     echo "copilot lane healthy: yes"
   else
@@ -609,6 +673,13 @@ cmd_doctor() {
   fi
   echo
 
+  echo "[compression tuning]"
+  echo "HEADROOM_COMPRESS_USER_MESSAGES=${HEADROOM_COMPRESS_USER_MESSAGES:-1}"
+  echo "HEADROOM_MIN_TOKENS=${HEADROOM_MIN_TOKENS:-120}"
+  echo "HEADROOM_PROTECT_RECENT=${HEADROOM_PROTECT_RECENT:-2}"
+  echo "HEADWAY_BEDROCK_AUTO_CACHE_CONTROL=${HEADWAY_BEDROCK_AUTO_CACHE_CONTROL:-1}"
+  echo
+
   echo "[aws sessions]"
   if AWS_REGION="$aws_region" AWS_DEFAULT_REGION="$aws_region" aws sts get-caller-identity --profile "$aws_profile_name" >/dev/null 2>&1; then
     echo "AWS_PROFILE ($aws_profile_name): valid"
@@ -651,6 +722,7 @@ cmd_config() {
       load_env
       ensure_env_defaults ""
       load_env
+      sync_headroom_tuning_env
       local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
       if [[ -z "$aws_profile_name" ]]; then
         echo "ERROR: AWS_PROFILE is required; set it in $ENV_FILE"
@@ -734,6 +806,10 @@ cmd_config() {
       echo "BEDROCK_DISCOVERY_AWS_PROFILE=${BEDROCK_DISCOVERY_AWS_PROFILE:-<unset>}"
       echo "AWS_REGION=${AWS_REGION:-<unset>}"
       echo "HEADROOM_BEDROCK_IMAGE=${HEADROOM_BEDROCK_IMAGE:-<unset>}"
+      echo "HEADROOM_COMPRESS_USER_MESSAGES=${HEADROOM_COMPRESS_USER_MESSAGES:-1}"
+      echo "HEADROOM_MIN_TOKENS=${HEADROOM_MIN_TOKENS:-120}"
+      echo "HEADROOM_PROTECT_RECENT=${HEADROOM_PROTECT_RECENT:-2}"
+      echo "HEADWAY_BEDROCK_AUTO_CACHE_CONTROL=${HEADWAY_BEDROCK_AUTO_CACHE_CONTROL:-1}"
       echo "KILO_CONF=$KILO_CONF"
       echo "CLAUDE_CODE_SETTINGS=$CLAUDE_CODE_SETTINGS"
       ;;
@@ -814,10 +890,32 @@ cmd_reset() {
     cleanup_claude_config
   fi
 
-  echo "reset complete"
+  echo "reset complete — services are stopped"
+  echo "  → Run './headway up' to restart (includes AWS auth refresh)."
 }
 
 cmd_test() {
+  require_cmd aws
+  require_cmd python3
+  require_docker
+
+  load_env
+  ensure_env_defaults ""
+  load_env
+
+  local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
+  local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
+  local aws_region="${AWS_REGION:-$DEFAULT_AWS_REGION}"
+
+  if ! AWS_REGION="$aws_region" AWS_DEFAULT_REGION="$aws_region" \
+       aws sts get-caller-identity --profile "$bedrock_profile" >/dev/null 2>&1; then
+    echo "ERROR: AWS credentials expired for profile '$bedrock_profile'."
+    echo "       Fix: ./headway auth"
+    exit 1
+  fi
+
+  check_copilot_auth_hint || true
+
   exec bash "$ROOT_DIR/scripts/cli/test.sh" "$@"
 }
 

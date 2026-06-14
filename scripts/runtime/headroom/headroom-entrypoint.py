@@ -48,7 +48,8 @@ if site_pkg and PATCH_SRC.exists():
     with contextlib.suppress(OSError):
         (site_pkg / "usercustomize.py").write_text(
             "try:\n"
-            "    from headroom_patch import unified_stats_patch\n"
+            "    from headroom_patch import bedrock_native_patch, unified_stats_patch\n"
+            "    bedrock_native_patch.apply_patch()\n"
             "    unified_stats_patch.apply_patch()\n"
             "except Exception:\n"
             "    pass\n"

@@ -17,7 +17,8 @@ fi
 # Write a usercustomize.py into site-packages (loads after site.py, after packages).
 cat >"${SITE_PACKAGES}/usercustomize.py" <<'PYEOF'
 try:
-    from headroom_patch import unified_stats_patch
+    from headroom_patch import bedrock_native_patch, unified_stats_patch
+    bedrock_native_patch.apply_patch()
     unified_stats_patch.apply_patch()
 except Exception:
     pass

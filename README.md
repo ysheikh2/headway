@@ -35,7 +35,7 @@ Request flow:
 
 ```text
 Client/Extension (Copilot/OpenAI-compatible) -> Headroom :4000 -> LiteLLM :4001 -> Provider
-Client/Extension (Bedrock native)            -> Headroom :4002 (native Bedrock routes) -> AWS Bedrock
+Client/Extension (Bedrock native)            -> Headroom :4002 (Python patch: compress+cache) -> headroom-bedrock (Rust SigV4) -> AWS Bedrock
 ```
 
 ## Client and Extension Compatibility
@@ -129,6 +129,25 @@ Environment profile behavior:
 ./headway doctor
 ./headway stats
 ```
+
+Optional compression tuning (Copilot/OpenAI lane; enabled by Headway defaults):
+
+- `HEADROOM_COMPRESS_USER_MESSAGES=1`
+- `HEADROOM_MIN_TOKENS=120`
+- `HEADROOM_PROTECT_RECENT=2`
+
+These defaults improve practical savings for coding-agent workloads (large user turns and older tool outputs) while keeping the last recent context protected. Override any of them in `.env` if you want a more conservative or more aggressive tradeoff.
+
+Bedrock native lane savings (enabled by default):
+
+- `:4002` traffic passes through Headway's Python runtime patch before Rust SigV4 forwarding.
+- For Anthropic Bedrock models, Headway applies:
+  - request compression (same headroom `compress()` pipeline)
+  - local compression cache reuse across turns
+  - optional auto-placement of `cache_control` markers (`HEADWAY_BEDROCK_AUTO_CACHE_CONTROL=1`)
+- Bedrock-native savings metrics (input/output tokens, compression %, and USD) are exposed at `/bedrock-native/stats` and rolled into unified `./headway stats` output and the dashboard.
+
+USD savings are estimated from a local pricing snapshot of [models.dev](https://models.dev/api.json), refreshed by `./headway up` and `./headway update` into `.data/headroom/models-dev.json` (gitignored). If the snapshot is missing (e.g. first run while offline), token savings still display but USD figures are omitted rather than guessed.
 
 ## Configuration Examples
 
