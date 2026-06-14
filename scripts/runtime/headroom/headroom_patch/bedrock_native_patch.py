@@ -247,6 +247,8 @@ class _BedrockNativeStats:
     tokens_saved: int = 0
     output_tokens: int = 0
     cache_markers_applied: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     best_before: int = 0
     best_after: int = 0
     by_model: dict[str, dict[str, int]] | None = None
@@ -698,6 +700,8 @@ def _record_stats(
     before: int,
     after: int,
     output_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
     compressed: bool,
     marker_applied: bool,
     failed: bool,
@@ -713,6 +717,22 @@ def _record_stats(
             _stats.failed_requests += 1
         if output_tokens > 0:
             _stats.output_tokens += output_tokens
+        if cache_read_tokens > 0:
+            _stats.cache_read_tokens += cache_read_tokens
+        if cache_write_tokens > 0:
+            _stats.cache_write_tokens += cache_write_tokens
+
+        _default_row: dict[str, int] = {
+            "requests": 0,
+            "tokens_before": 0,
+            "tokens_after": 0,
+            "tokens_saved": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "failed": 0,
+        }
+
         if before > 0:
             _stats.tokens_before += before
             _stats.tokens_after += after if after > 0 else before
@@ -722,38 +742,22 @@ def _record_stats(
                 _stats.best_before = before
                 _stats.best_after = after
 
-            model_row = _stats.by_model.setdefault(
-                model_id,
-                {
-                    "requests": 0,
-                    "tokens_before": 0,
-                    "tokens_after": 0,
-                    "tokens_saved": 0,
-                    "output_tokens": 0,
-                    "failed": 0,
-                },
-            )
+            model_row = _stats.by_model.setdefault(model_id, dict(_default_row))
             model_row["requests"] += 1
             model_row["tokens_before"] += before
             model_row["tokens_after"] += after if after > 0 else before
             model_row["tokens_saved"] += saved
             model_row["output_tokens"] = model_row.get("output_tokens", 0) + output_tokens
+            model_row["cache_read_tokens"] = model_row.get("cache_read_tokens", 0) + cache_read_tokens
+            model_row["cache_write_tokens"] = model_row.get("cache_write_tokens", 0) + cache_write_tokens
             if failed:
                 model_row["failed"] += 1
         else:
-            model_row = _stats.by_model.setdefault(
-                model_id,
-                {
-                    "requests": 0,
-                    "tokens_before": 0,
-                    "tokens_after": 0,
-                    "tokens_saved": 0,
-                    "output_tokens": 0,
-                    "failed": 0,
-                },
-            )
+            model_row = _stats.by_model.setdefault(model_id, dict(_default_row))
             model_row["requests"] += 1
             model_row["output_tokens"] = model_row.get("output_tokens", 0) + output_tokens
+            model_row["cache_read_tokens"] = model_row.get("cache_read_tokens", 0) + cache_read_tokens
+            model_row["cache_write_tokens"] = model_row.get("cache_write_tokens", 0) + cache_write_tokens
             if failed:
                 model_row["failed"] += 1
 
@@ -766,6 +770,8 @@ def _record_stats(
                 "input_tokens_optimized": after if after > 0 else before,
                 "output_tokens": output_tokens,
                 "tokens_saved": max(0, before - (after if after > 0 else before)),
+                "cache_read_tokens": cache_read_tokens,
+                "cache_write_tokens": cache_write_tokens,
                 "failed": failed,
                 "compressed": compressed,
                 "marker_applied": marker_applied,
@@ -790,43 +796,62 @@ def _parse_output_tokens_from_response(body_bytes: bytes, action: str) -> int:
     if not isinstance(resp, dict):
         return 0
 
-    # Anthropic Messages API: {"usage": {"output_tokens": N}}
     usage = resp.get("usage")
     if isinstance(usage, dict):
         out = usage.get("output_tokens") or usage.get("outputTokens") or 0
         if isinstance(out, (int, float)) and out > 0:
             return int(out)
 
-    # Bedrock Converse API: {"usage": {"outputTokens": N}}
-    # (covered above via outputTokens key)
-
-    # Bedrock InvokeModel Anthropic format wrapped in choices
-    choices = resp.get("choices")
-    if isinstance(choices, list) and choices:
-        return 0  # OpenAI format doesn't carry token counts here
-
     return 0
 
 
+def _parse_cache_tokens_from_response(body_bytes: bytes) -> tuple[int, int]:
+    """Extract (cache_read_tokens, cache_write_tokens) from a Bedrock/Anthropic response.
+
+    Handles both formats:
+    - Anthropic Messages API: cache_read_input_tokens / cache_creation_input_tokens
+    - Bedrock Converse API:   cacheReadInputTokenCount / cacheWriteInputTokenCount
+    """
+    if not body_bytes:
+        return 0, 0
+    try:
+        resp = json.loads(body_bytes)
+    except Exception:
+        return 0, 0
+    if not isinstance(resp, dict):
+        return 0, 0
+
+    usage = resp.get("usage")
+    if not isinstance(usage, dict):
+        return 0, 0
+
+    # Anthropic Messages API format (v1/messages on Bedrock lane)
+    cr = int(usage.get("cache_read_input_tokens") or 0)
+    cw = int(usage.get("cache_creation_input_tokens") or 0)
+    # Bedrock Converse API format
+    if cr == 0:
+        cr = int(usage.get("cacheReadInputTokenCount") or 0)
+    if cw == 0:
+        cw = int(usage.get("cacheWriteInputTokenCount") or 0)
+
+    return cr, cw
+
+
 class _StreamUsageScanner:
-    """Extract the final output-token count from a streaming response body.
+    """Extract the final usage counts from a streaming response body.
 
-    Streaming responses carry usage metadata near the end of the stream, in one
-    of two shapes depending on the surface:
-
-    - Anthropic Messages SSE (``/v1/messages`` stream): ``message_delta`` events
-      carry a cumulative ``"output_tokens"`` that grows to the final total.
-    - Bedrock Converse event-stream (``converse-stream``): a single ``metadata``
-      frame carries ``"outputTokens"`` with the total.
-
-    Rather than fully decode the AWS event-stream binary framing, we scan the
-    raw bytes for the JSON field and take the max value seen (final cumulative
-    count for Anthropic, the single value for Converse). Only a bounded tail of
-    the stream is retained, since the usage metadata is always at the end.
+    Scans for output tokens, cache-read tokens, and cache-write tokens in both
+    Anthropic SSE and Bedrock Converse event-stream formats.
     """
 
     _MAX_TAIL = 65536
-    _PATTERN = re.compile(rb'"(?:output_tokens|outputTokens)"\s*:\s*(\d+)')
+    _OUT_PATTERN = re.compile(rb'"(?:output_tokens|outputTokens)"\s*:\s*(\d+)')
+    _CR_PATTERN = re.compile(
+        rb'"(?:cache_read_input_tokens|cacheReadInputTokenCount)"\s*:\s*(\d+)'
+    )
+    _CW_PATTERN = re.compile(
+        rb'"(?:cache_creation_input_tokens|cacheWriteInputTokenCount)"\s*:\s*(\d+)'
+    )
 
     def __init__(self) -> None:
         self._buf = bytearray()
@@ -838,9 +863,9 @@ class _StreamUsageScanner:
         if len(self._buf) > self._MAX_TAIL:
             del self._buf[: -self._MAX_TAIL]
 
-    def output_tokens(self) -> int:
+    def _max_match(self, pattern: re.Pattern) -> int:  # type: ignore[type-arg]
         best = 0
-        for match in self._PATTERN.finditer(bytes(self._buf)):
+        for match in pattern.finditer(bytes(self._buf)):
             try:
                 value = int(match.group(1))
             except Exception:
@@ -848,6 +873,15 @@ class _StreamUsageScanner:
             if value > best:
                 best = value
         return best
+
+    def output_tokens(self) -> int:
+        return self._max_match(self._OUT_PATTERN)
+
+    def cache_read_tokens(self) -> int:
+        return self._max_match(self._CR_PATTERN)
+
+    def cache_write_tokens(self) -> int:
+        return self._max_match(self._CW_PATTERN)
 
 
 def snapshot_stats() -> dict[str, Any]:
@@ -892,6 +926,8 @@ def _stats_payload() -> dict[str, Any]:
             "proxy_compression_saved": snapshot.tokens_saved,
             "savings_percent": round(pct, 2),
             "proxy_savings_percent": round(pct, 2),
+            "cache_read": snapshot.cache_read_tokens,
+            "cache_write": snapshot.cache_write_tokens,
         },
         "requests": {
             "failed": snapshot.failed_requests,
@@ -955,7 +991,12 @@ async def _forward_request(
                 await upstream.aclose()
                 if on_stream_complete is not None:
                     try:
-                        on_stream_complete(scanner.output_tokens(), status_code)
+                        on_stream_complete(
+                            scanner.output_tokens(),
+                            scanner.cache_read_tokens(),
+                            scanner.cache_write_tokens(),
+                            status_code,
+                        )
                     except Exception:
                         pass
 
@@ -1023,15 +1064,19 @@ async def _handle_v1_messages(request):
             failed = True
 
     try:
-        # For streaming, output tokens are only known once the stream is fully
-        # consumed; defer the stats record into the stream-complete callback.
-        def _on_stream_complete(out_tokens: int, status_code: int) -> None:
+        # For streaming, output/cache tokens are only known once the stream is
+        # fully consumed; defer the stats record into the stream-complete callback.
+        def _on_stream_complete(
+            out_tokens: int, cr_tokens: int, cw_tokens: int, status_code: int
+        ) -> None:
             _record_stats(
                 model_id=model_id,
                 action="v1/messages",
                 before=before,
                 after=after,
                 output_tokens=out_tokens,
+                cache_read_tokens=cr_tokens,
+                cache_write_tokens=cw_tokens,
                 compressed=compressed,
                 marker_applied=marker_applied,
                 failed=failed or status_code >= 400,
@@ -1049,9 +1094,12 @@ async def _handle_v1_messages(request):
         if response.status_code >= 400:
             failed = True
         out_tokens = 0
+        cr_tokens = 0
+        cw_tokens = 0
         if not failed and hasattr(response, "body"):
             try:
                 out_tokens = _parse_output_tokens_from_response(response.body, "v1/messages")
+                cr_tokens, cw_tokens = _parse_cache_tokens_from_response(response.body)
             except Exception:
                 pass
         _record_stats(
@@ -1060,6 +1108,8 @@ async def _handle_v1_messages(request):
             before=before,
             after=after,
             output_tokens=out_tokens,
+            cache_read_tokens=cr_tokens,
+            cache_write_tokens=cw_tokens,
             compressed=compressed,
             marker_applied=marker_applied,
             failed=failed,
@@ -1223,15 +1273,19 @@ def apply_patch() -> None:
 
             is_stream = _is_streaming_action(action)
             try:
-                # For streaming, output tokens are only known once the stream is
-                # fully consumed; defer the stats record into the callback.
-                def _on_stream_complete(out_tokens: int, status_code: int) -> None:
+                # For streaming, output/cache tokens are only known once the
+                # stream is fully consumed; defer into the callback.
+                def _on_stream_complete(
+                    out_tokens: int, cr_tokens: int, cw_tokens: int, status_code: int
+                ) -> None:
                     _record_stats(
                         model_id=model_id,
                         action=action,
                         before=before,
                         after=after,
                         output_tokens=out_tokens,
+                        cache_read_tokens=cr_tokens,
+                        cache_write_tokens=cw_tokens,
                         compressed=compressed,
                         marker_applied=marker_applied,
                         failed=failed or status_code >= 400,
@@ -1249,9 +1303,12 @@ def apply_patch() -> None:
                 if response.status_code >= 400:
                     failed = True
                 out_tokens = 0
+                cr_tokens = 0
+                cw_tokens = 0
                 if not failed and hasattr(response, "body"):
                     try:
                         out_tokens = _parse_output_tokens_from_response(response.body, action)
+                        cr_tokens, cw_tokens = _parse_cache_tokens_from_response(response.body)
                     except Exception:
                         pass
                 _record_stats(
@@ -1260,6 +1317,8 @@ def apply_patch() -> None:
                     before=before,
                     after=after,
                     output_tokens=out_tokens,
+                    cache_read_tokens=cr_tokens,
+                    cache_write_tokens=cw_tokens,
                     compressed=compressed,
                     marker_applied=marker_applied,
                     failed=failed,
