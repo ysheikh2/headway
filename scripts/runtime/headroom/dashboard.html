@@ -140,7 +140,7 @@
                     <span class="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
                     <span class="text-xs text-cyan-100">
                         <span x-text="stats.config.savings_profile"></span>
-                        <template x-if="stats.config.target_savings_percent !== null">
+                        <template x-if="stats.config.target_savings_percent != null">
                             <span x-text="' · target ' + stats.config.target_savings_percent + '%'"></span>
                         </template>
                     </span>
@@ -526,7 +526,7 @@
                                  :class="(stats.codex_rate_limits.primary.used_percent||0) > 80 ? 'bg-red-500' : (stats.codex_rate_limits.primary.used_percent||0) > 60 ? 'bg-amber-500' : 'bg-emerald-500'"
                                  :style="'width: ' + Math.min(stats.codex_rate_limits.primary.used_percent||0, 100) + '%'"></div>
                         </div>
-                        <template x-if="stats.codex_rate_limits.primary.seconds_until_reset !== null">
+                        <template x-if="stats.codex_rate_limits.primary.seconds_until_reset != null">
                             <div class="text-xs text-gray-500 mt-1"
                                  x-text="'Resets in ' + formatResetTime(stats.codex_rate_limits.primary.seconds_until_reset)"></div>
                         </template>
@@ -550,7 +550,7 @@
                                      :class="(stats.codex_rate_limits.secondary.used_percent||0) > 80 ? 'bg-red-500' : (stats.codex_rate_limits.secondary.used_percent||0) > 60 ? 'bg-amber-500' : 'bg-emerald-500'"
                                      :style="'width: ' + Math.min(stats.codex_rate_limits.secondary.used_percent||0, 100) + '%'"></div>
                             </div>
-                            <template x-if="stats.codex_rate_limits.secondary.seconds_until_reset !== null">
+                            <template x-if="stats.codex_rate_limits.secondary.seconds_until_reset != null">
                                 <div class="text-xs text-gray-500 mt-1"
                                      x-text="'Resets in ' + formatResetTime(stats.codex_rate_limits.secondary.seconds_until_reset)"></div>
                             </template>

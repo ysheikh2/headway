@@ -207,6 +207,10 @@ def apply_patch(upstream: str) -> str:
             file=sys.stderr,
         )
 
+    # x-if="... !== null" uses strict inequality — undefined passes the guard unexpectedly.
+    # Use loose != null so both null and undefined are excluded.
+    patched = patched.replace(" !== null", " != null")
+
     return patched
 
 

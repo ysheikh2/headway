@@ -5,16 +5,16 @@ import json
 import os
 import re
 import threading
+from contextlib import suppress
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from starlette.concurrency import run_in_threadpool
-
 from headroom.cache.compression_cache import CompressionCache
 from headroom.proxy.helpers import read_request_json_with_bytes
+from starlette.concurrency import run_in_threadpool
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -24,11 +24,21 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError:
+        return default
+
+
 BEDROCK_UPSTREAM = os.getenv("HEADROOM_BEDROCK_PROXY_URL", "http://headroom-bedrock:8787")
 AUTO_CACHE_CONTROL = _env_bool("HEADWAY_BEDROCK_AUTO_CACHE_CONTROL", True)
 COMPRESS_USER_MESSAGES = _env_bool("HEADROOM_COMPRESS_USER_MESSAGES", True)
-PROTECT_RECENT = int(os.getenv("HEADROOM_PROTECT_RECENT", "2"))
-MIN_TOKENS = int(os.getenv("HEADROOM_MIN_TOKENS", "120"))
+PROTECT_RECENT = _env_int("HEADROOM_PROTECT_RECENT", 2)
+MIN_TOKENS = _env_int("HEADROOM_MIN_TOKENS", 120)
 
 # Savings profile drives the real coding-agent savings: it forces Kompress past
 # the conservative ratio gate (target_ratio=0.1, force_kompress) and tells
@@ -43,8 +53,8 @@ SAVINGS_PROFILE = (os.getenv("HEADROOM_BEDROCK_SAVINGS_PROFILE") or "agent-90").
 # forward unchanged. Compression on very large bodies can route to the slow
 # Kompress ONNX path (multi-second CPU inference); the cap bounds worst-case
 # latency. Generous default so normal agent traffic still compresses.
-MAX_COMPRESS_BYTES = int(os.getenv("HEADROOM_BEDROCK_COMPRESS_MAX_BYTES", str(3_000_000)))
-MODEL_LIMIT = int(os.getenv("HEADROOM_BEDROCK_MODEL_LIMIT", str(200_000)))
+MAX_COMPRESS_BYTES = _env_int("HEADROOM_BEDROCK_COMPRESS_MAX_BYTES", 3_000_000)
+MODEL_LIMIT = _env_int("HEADROOM_BEDROCK_MODEL_LIMIT", 200_000)
 DEBUG_COMPRESS = _env_bool("HEADWAY_BEDROCK_DEBUG_COMPRESS", False)
 
 # Aggressiveness knobs. The proxy's shared ContentRouter is deliberately
@@ -228,7 +238,7 @@ def _compress_messages(
             try:
                 with open("/tmp/headway_compress_debug.jsonl", "a") as fh:
                     fh.write(json.dumps({"ts": _utc_now_iso(), "debug_error": repr(exc)}) + "\n")
-            except Exception:
+            except Exception:  # noqa: BLE001
                 pass
 
     # Inflation guard: never forward more tokens than we received.
@@ -596,10 +606,11 @@ def _add_cache_control_marker(messages: list[dict[str, Any]]) -> bool:
             block = content[j]
             if not isinstance(block, dict):
                 continue
-            if block.get("type") == "text" or "text" in block or block.get("type") == "tool_result":
-                if "cache_control" not in block:
-                    block["cache_control"] = {"type": "ephemeral"}
-                    return True
+            if (
+                block.get("type") == "text" or "text" in block or block.get("type") == "tool_result"
+            ) and "cache_control" not in block:
+                block["cache_control"] = {"type": "ephemeral"}
+                return True
     return False
 
 
@@ -634,7 +645,7 @@ def _compress_bedrock_body(
                     )
                     + "\n"
                 )
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
 
     anthropic_messages = _bedrock_messages_to_anthropic(messages)
@@ -1046,15 +1057,13 @@ async def _forward_request(
             finally:
                 await upstream.aclose()
                 if on_stream_complete is not None:
-                    try:
+                    with suppress(Exception):
                         on_stream_complete(
                             scanner.output_tokens(),
                             scanner.cache_read_tokens(),
                             scanner.cache_write_tokens(),
                             status_code,
                         )
-                    except Exception:
-                        pass
 
         return StreamingResponse(
             _iter_bytes(),
@@ -1156,7 +1165,7 @@ async def _handle_v1_messages(request):
             try:
                 out_tokens = _parse_output_tokens_from_response(response.body, "v1/messages")
                 cr_tokens, cw_tokens = _parse_cache_tokens_from_response(response.body)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 pass
         _record_stats(
             model_id=model_id,
@@ -1203,7 +1212,7 @@ def _prewarm() -> None:
             {"role": "user", "content": [{"type": "text", "text": "ok"}]},
         ]
         _compress_messages(warm_msgs, "anthropic.claude-3-5-sonnet-20240620-v1:0")
-    except Exception:
+    except Exception:  # noqa: BLE001
         pass
 
 
@@ -1275,7 +1284,7 @@ def apply_patch() -> None:
                         body_json, _ = await read_request_json_with_bytes(request)
                         if isinstance(body_json, dict):
                             model_hint = str(body_json.get("model") or model_hint)
-                    except Exception:
+                    except Exception:  # noqa: BLE001
                         pass
 
                     response = await call_next(request)
@@ -1365,7 +1374,7 @@ def apply_patch() -> None:
                     try:
                         out_tokens = _parse_output_tokens_from_response(response.body, action)
                         cr_tokens, cw_tokens = _parse_cache_tokens_from_response(response.body)
-                    except Exception:
+                    except Exception:  # noqa: BLE001
                         pass
                 _record_stats(
                     model_id=model_id,
@@ -1411,4 +1420,4 @@ def apply_patch() -> None:
         return app
 
     server.create_app = patched_create_app
-    setattr(server, "_bedrock_native_patch_applied", True)
+    server._bedrock_native_patch_applied = True

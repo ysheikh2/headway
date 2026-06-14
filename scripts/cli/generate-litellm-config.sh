@@ -34,7 +34,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$BEDROCK_DISCOVERY_AWS_PROFILE" ]]; then
-  BEDROCK_DISCOVERY_AWS_PROFILE="$AWS_PROFILE_NAME"
+  BEDROCK_DISCOVERY_AWS_PROFILE="${BEDROCK_AWS_PROFILE:-$AWS_PROFILE_NAME}"
 fi
 
 if ! command -v aws >/dev/null 2>&1; then

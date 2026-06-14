@@ -217,7 +217,7 @@ PY
 
 get_bedrock_native_saved_tokens() {
   local base_url="$1"
-  curl -s --max-time 8 "$base_url/bedrock-native/stats" | python3 -c '
+  curl -s --max-time 8 "$base_url/bedrock-native/stats" 2>/dev/null | python3 -c '
 import json,sys
 try:
     d=json.load(sys.stdin)
@@ -229,7 +229,7 @@ except Exception:
 
 get_copilot_saved_tokens() {
   local base_url="$1"
-  curl -s --max-time 8 "$base_url/stats" | python3 -c '
+  curl -s --max-time 8 "$base_url/stats" 2>/dev/null | python3 -c '
 import json,sys
 try:
     d=json.load(sys.stdin)
@@ -241,7 +241,7 @@ except Exception:
 
 get_copilot_cache_read_tokens() {
   local base_url="$1"
-  curl -s --max-time 8 "$base_url/stats" | python3 -c '
+  curl -s --max-time 8 "$base_url/stats" 2>/dev/null | python3 -c '
 import json,sys
 try:
     d=json.load(sys.stdin)
@@ -253,7 +253,7 @@ except Exception:
 
 get_copilot_cache_savings_usd() {
   local base_url="$1"
-  curl -s --max-time 8 "$base_url/stats" | python3 -c '
+  curl -s --max-time 8 "$base_url/stats" 2>/dev/null | python3 -c '
 import json,sys
 try:
     d=json.load(sys.stdin)
@@ -425,7 +425,7 @@ fi
 # The Kompress ONNX model cold-load takes ~30 s. If the gateway has been up
 # for less than 90 s, pause briefly so the prewarm thread finishes before the
 # compression probe runs (avoids spurious timeouts immediately after a restart).
-HEADROOM_UPTIME=$(docker inspect headroom-gateway --format '{{.State.StartedAt}}' 2>/dev/null |
+HEADROOM_UPTIME=$(docker inspect headroom-bedrock-gateway --format '{{.State.StartedAt}}' 2>/dev/null |
   python3 -c "
 import sys, datetime
 try:
@@ -438,7 +438,7 @@ except Exception:
 " 2>/dev/null || echo 9999)
 if [[ "${HEADROOM_UPTIME:-9999}" -lt 90 ]]; then
   WAIT_SECS=$((90 - HEADROOM_UPTIME))
-  echo "[ Preflight: headroom-gateway started ${HEADROOM_UPTIME}s ago; waiting ${WAIT_SECS}s for prewarm ]"
+  echo "[ Preflight: headroom-bedrock-gateway started ${HEADROOM_UPTIME}s ago; waiting ${WAIT_SECS}s for prewarm ]"
   sleep "$WAIT_SECS"
   echo
 fi

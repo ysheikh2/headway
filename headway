@@ -59,8 +59,6 @@ iter_env_template_pairs() {
 
   # Fallback defaults if template is missing.
   printf '%s\n' "AWS_PROFILE=$DEFAULT_AWS_PROFILE"
-  printf '%s\n' "# BEDROCK_AWS_PROFILE=$DEFAULT_AWS_PROFILE"
-  printf '%s\n' "# BEDROCK_DISCOVERY_AWS_PROFILE=$DEFAULT_AWS_PROFILE"
   printf '%s\n' "AWS_REGION=$DEFAULT_AWS_REGION"
   printf '%s\n' "HEADROOM_BEDROCK_IMAGE=$DEFAULT_BEDROCK_IMAGE"
 }
@@ -728,7 +726,7 @@ cmd_config() {
         echo "ERROR: AWS_PROFILE is required; set it in $ENV_FILE"
         exit 1
       fi
-      local discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-${BEDROCK_AWS_PROFILE:-$aws_profile_name}}"
+      local discovery_profile=""
       local region="${AWS_REGION:-$DEFAULT_AWS_REGION}"
 
       while [[ $# -gt 0 ]]; do
@@ -755,6 +753,9 @@ cmd_config() {
             ;;
         esac
       done
+      if [[ -z "$discovery_profile" ]]; then
+        discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-${BEDROCK_AWS_PROFILE:-$aws_profile_name}}"
+      fi
 
       ensure_aws_session "$discovery_profile" "$region"
       generate_config "$aws_profile_name" "$discovery_profile"

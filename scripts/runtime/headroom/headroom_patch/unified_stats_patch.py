@@ -88,10 +88,9 @@ def _lookup_record(display_model: str) -> dict[str, float] | None:
     best: dict[str, float] | None = None
     best_len = 0
     for model_id, rec in pricing.items():
-        if model_id in key or key in model_id:
-            if len(model_id) > best_len:
-                best = rec
-                best_len = len(model_id)
+        if (model_id in key or key in model_id) and len(model_id) > best_len:
+            best = rec
+            best_len = len(model_id)
     return best
 
 
@@ -500,11 +499,11 @@ def _merge_unified_stats(base: dict[str, Any], bedrock: _BedrockStats) -> dict[s
             rec = _lookup_record(display_model)
             if rec is not None:
                 in_price, out_price = rec["input"], rec["output"]
+                bedrock_without_usd += sent * in_price + out_toks * out_price
+                bedrock_with_usd += after_toks * in_price + out_toks * out_price
                 if saved > 0:
                     compression_savings_usd = saved * in_price
                     bedrock_compression_savings_usd += compression_savings_usd
-                    bedrock_without_usd += sent * in_price + out_toks * out_price
-                    bedrock_with_usd += after_toks * in_price + out_toks * out_price
                 if cr_toks > 0:
                     # Cache reads bill at cache_read price (90% off) instead of input.
                     read_savings = cr_toks * max(0.0, rec["input"] - rec["cache_read"])
