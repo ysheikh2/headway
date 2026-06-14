@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 PATCH_SCRIPT = REPO_ROOT / "scripts" / "build" / "headroom_upstream" / "patch_headroom_upstream.py"
 DEFAULT_RECORD = (
     REPO_ROOT / "scripts" / "build" / "headroom_upstream" / "upstream_patch_compat.json"

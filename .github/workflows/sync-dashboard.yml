@@ -13,6 +13,10 @@ env:
         required: false
         default: "main"
 
+concurrency:
+  group: sync-dashboard-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
   pull-requests: write
@@ -26,6 +30,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.3
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v6.2.0

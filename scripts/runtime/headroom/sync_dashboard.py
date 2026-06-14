@@ -23,7 +23,7 @@ UPSTREAM_DEFAULT = (
     "headroom/dashboard/templates/dashboard.html"
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 DASHBOARD_PATH = REPO_ROOT / "scripts" / "runtime" / "headroom" / "dashboard.html"
 
 INSERT_MARKER = """

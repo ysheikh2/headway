@@ -303,6 +303,10 @@ cmd_init() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --aws-profile)
+        if [[ $# -lt 2 || "$2" == --* ]]; then
+          echo "ERROR: --aws-profile requires value"
+          exit 1
+        fi
         aws_profile_override="$2"
         shift 2
         ;;
@@ -355,6 +359,10 @@ cmd_up() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --aws-profile)
+        if [[ $# -lt 2 || "$2" == --* ]]; then
+          echo "ERROR: --aws-profile requires value"
+          exit 1
+        fi
         aws_profile_override="$2"
         shift 2
         ;;
@@ -595,10 +603,18 @@ cmd_config() {
       while [[ $# -gt 0 ]]; do
         case "$1" in
           --aws-profile)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+              echo "ERROR: --aws-profile requires value"
+              exit 1
+            fi
             aws_profile_name="$2"
             shift 2
             ;;
           --bedrock-discovery-profile)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+              echo "ERROR: --bedrock-discovery-profile requires value"
+              exit 1
+            fi
             discovery_profile="$2"
             shift 2
             ;;
