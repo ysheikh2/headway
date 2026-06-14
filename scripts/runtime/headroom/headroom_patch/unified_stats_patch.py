@@ -61,8 +61,12 @@ def _load_models_dev_pricing() -> dict[str, dict[str, float]]:
             result[norm] = {
                 "input": float(in_c) / 1_000_000,
                 "output": float(out_c) / 1_000_000,
-                "cache_read": (float(cr) / 1_000_000) if isinstance(cr, (int, float)) else float(in_c) / 1_000_000,
-                "cache_write": (float(cw) / 1_000_000) if isinstance(cw, (int, float)) else float(in_c) / 1_000_000,
+                "cache_read": (float(cr) / 1_000_000)
+                if isinstance(cr, (int, float))
+                else float(in_c) / 1_000_000,
+                "cache_write": (float(cw) / 1_000_000)
+                if isinstance(cw, (int, float))
+                else float(in_c) / 1_000_000,
             }
 
     _models_dev_pricing_cache = result
