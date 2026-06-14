@@ -7,6 +7,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 ENV_FILE="$ROOT_DIR/.env"
 KILO_CONF="$HOME/.config/kilo/kilo.jsonc"
+CLAUDE_CODE_SETTINGS_DEFAULT="$HOME/Library/Application Support/Code/User/settings.json"
+CLAUDE_CODE_SETTINGS="${CLAUDE_CODE_SETTINGS:-$CLAUDE_CODE_SETTINGS_DEFAULT}"
 PY_HELPER="$ROOT_DIR/scripts/cli/headroom_python.py"
 
 DEFAULT_AWS_REGION="eu-central-1"
@@ -57,8 +59,8 @@ iter_env_template_pairs() {
 
   # Fallback defaults if template is missing.
   printf '%s\n' "AWS_PROFILE=$DEFAULT_AWS_PROFILE"
-  printf '%s\n' "BEDROCK_AWS_PROFILE=$DEFAULT_AWS_PROFILE"
-  printf '%s\n' "BEDROCK_DISCOVERY_PROFILE=$DEFAULT_AWS_PROFILE"
+  printf '%s\n' "# BEDROCK_AWS_PROFILE=$DEFAULT_AWS_PROFILE"
+  printf '%s\n' "# BEDROCK_DISCOVERY_AWS_PROFILE=$DEFAULT_AWS_PROFILE"
   printf '%s\n' "AWS_REGION=$DEFAULT_AWS_REGION"
   printf '%s\n' "HEADROOM_BEDROCK_IMAGE=$DEFAULT_BEDROCK_IMAGE"
 }
@@ -93,7 +95,7 @@ prompt_label_for_env_key() {
     BEDROCK_AWS_PROFILE)
       echo "Bedrock AWS profile"
       ;;
-    BEDROCK_DISCOVERY_PROFILE)
+    BEDROCK_DISCOVERY_AWS_PROFILE)
       echo "Bedrock discovery profile"
       ;;
     AWS_REGION)
@@ -122,8 +124,12 @@ ensure_env_defaults() {
 
   if [[ -n "$aws_profile_override" ]]; then
     set_env_key "AWS_PROFILE" "$aws_profile_override"
-    set_env_key "BEDROCK_AWS_PROFILE" "$aws_profile_override"
-    set_env_key "BEDROCK_DISCOVERY_PROFILE" "$aws_profile_override"
+    if [[ -n "$(get_env_key "BEDROCK_AWS_PROFILE")" ]]; then
+      set_env_key "BEDROCK_AWS_PROFILE" "$aws_profile_override"
+    fi
+    if [[ -n "$(get_env_key "BEDROCK_DISCOVERY_AWS_PROFILE")" ]]; then
+      set_env_key "BEDROCK_DISCOVERY_AWS_PROFILE" "$aws_profile_override"
+    fi
   fi
 
   # Migrate legacy local pinned image to rolling remote tag.
@@ -195,7 +201,7 @@ run_init_questionnaire_if_needed() {
 
     local default_value
     default_value="$(env_template_default_for_key "$key" || true)"
-    if [[ "$key" == "BEDROCK_AWS_PROFILE" || "$key" == "BEDROCK_DISCOVERY_PROFILE" ]]; then
+    if [[ "$key" == "BEDROCK_AWS_PROFILE" || "$key" == "BEDROCK_DISCOVERY_AWS_PROFILE" ]]; then
       if [[ -n "$aws_profile" ]]; then
         default_value="$aws_profile"
       fi
@@ -270,6 +276,17 @@ setup_kilo_config() {
   python3 "$PY_HELPER" kilo-setup "$KILO_CONF"
 }
 
+setup_claude_config() {
+  local aws_profile="$1"
+  local aws_region="$2"
+
+  mkdir -p "$(dirname "$CLAUDE_CODE_SETTINGS")"
+  if [[ -f "$CLAUDE_CODE_SETTINGS" ]]; then
+    cp "$CLAUDE_CODE_SETTINGS" "$CLAUDE_CODE_SETTINGS.bak-$(date +%Y%m%d-%H%M%S)"
+  fi
+  python3 "$PY_HELPER" claude-setup "$CLAUDE_CODE_SETTINGS" "$aws_profile" "$aws_region"
+}
+
 cleanup_kilo_config() {
   if [[ ! -f "$KILO_CONF" ]]; then
     return 0
@@ -277,12 +294,19 @@ cleanup_kilo_config() {
   python3 "$PY_HELPER" kilo-cleanup "$KILO_CONF"
 }
 
+cleanup_claude_config() {
+  if [[ ! -f "$CLAUDE_CODE_SETTINGS" ]]; then
+    return 0
+  fi
+  python3 "$PY_HELPER" claude-cleanup "$CLAUDE_CODE_SETTINGS"
+}
+
 generate_config() {
   local aws_profile="$1"
   local discovery_profile="$2"
   bash "$ROOT_DIR/scripts/cli/generate-litellm-config.sh" \
     --aws-profile "$aws_profile" \
-    --bedrock-discovery-profile "$discovery_profile" \
+    --bedrock-discovery-aws-profile "$discovery_profile" \
     --output "$ROOT_DIR/litellm_config.yaml"
 }
 
@@ -331,8 +355,12 @@ cmd_init() {
   load_env
 
   local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
+  if [[ -z "$aws_profile_name" ]]; then
+    echo "ERROR: AWS_PROFILE is required; set it in $ENV_FILE"
+    exit 1
+  fi
   local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
-  local discovery_profile="${BEDROCK_DISCOVERY_PROFILE:-$aws_profile_name}"
+  local discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-${BEDROCK_AWS_PROFILE:-$aws_profile_name}}"
   local aws_region="${AWS_REGION:-$DEFAULT_AWS_REGION}"
 
   ensure_aws_session "$aws_profile_name" "$aws_region"
@@ -340,6 +368,7 @@ cmd_init() {
   ensure_aws_session "$discovery_profile" "$aws_region"
 
   setup_kilo_config
+  setup_claude_config "$bedrock_profile" "$aws_region"
 
   if [[ "$skip_config" != "true" ]]; then
     generate_config "$aws_profile_name" "$discovery_profile"
@@ -348,7 +377,7 @@ cmd_init() {
   echo "init complete"
   echo "- AWS_PROFILE: $aws_profile_name"
   echo "- BEDROCK_AWS_PROFILE: $bedrock_profile"
-  echo "- BEDROCK_DISCOVERY_PROFILE: $discovery_profile"
+  echo "- BEDROCK_DISCOVERY_AWS_PROFILE: $discovery_profile"
   echo "- AWS_REGION: $aws_region"
 }
 
@@ -386,8 +415,12 @@ cmd_up() {
   load_env
 
   local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
+  if [[ -z "$aws_profile_name" ]]; then
+    echo "ERROR: AWS_PROFILE is required; set it in $ENV_FILE"
+    exit 1
+  fi
   local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
-  local discovery_profile="${BEDROCK_DISCOVERY_PROFILE:-$aws_profile_name}"
+  local discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-${BEDROCK_AWS_PROFILE:-$aws_profile_name}}"
   local aws_region="${AWS_REGION:-$DEFAULT_AWS_REGION}"
 
   ensure_aws_session "$aws_profile_name" "$aws_region"
@@ -442,7 +475,11 @@ cmd_update() {
   load_env
 
   local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
-  local discovery_profile="${BEDROCK_DISCOVERY_PROFILE:-$aws_profile_name}"
+  if [[ -z "$aws_profile_name" ]]; then
+    echo "ERROR: AWS_PROFILE is required; set it in $ENV_FILE"
+    exit 1
+  fi
+  local discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-${BEDROCK_AWS_PROFILE:-$aws_profile_name}}"
   local aws_region="${AWS_REGION:-$DEFAULT_AWS_REGION}"
 
   if [[ "$regen_config" == "true" ]]; then
@@ -475,6 +512,10 @@ cmd_auth() {
   load_env
 
   local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
+  if [[ -z "$aws_profile_name" ]]; then
+    echo "ERROR: AWS_PROFILE is required; set it in $ENV_FILE"
+    exit 1
+  fi
   local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
   local aws_region="${AWS_REGION:-$DEFAULT_AWS_REGION}"
 
@@ -539,22 +580,36 @@ cmd_doctor() {
   fi
   echo
 
-  echo "[kilo config]"
+  local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
+  if [[ -z "$aws_profile_name" ]]; then
+    echo "ERROR: AWS_PROFILE is required; set it in $ENV_FILE"
+    exit 1
+  fi
+  local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
+  local aws_region="${AWS_REGION:-$DEFAULT_AWS_REGION}"
+
+  echo "[client config]"
   if [[ -f "$KILO_CONF" ]]; then
     if python3 "$PY_HELPER" kilo-check "$KILO_CONF" >/dev/null 2>&1; then
-      echo "baseURL settings are aligned"
+      echo "kilo: baseURL settings are aligned"
     else
-      echo "baseURL settings mismatch; run: ./headway config kilo"
+      echo "kilo: baseURL settings mismatch; run: ./headway config setup kilo"
     fi
   else
-    echo "missing $KILO_CONF; run: ./headway config kilo"
+    echo "kilo: missing $KILO_CONF; run: ./headway config setup kilo"
+  fi
+  if [[ -f "$CLAUDE_CODE_SETTINGS" ]]; then
+    if python3 "$PY_HELPER" claude-check "$CLAUDE_CODE_SETTINGS" "$bedrock_profile" "$aws_region" >/dev/null 2>&1; then
+      echo "claude code: bedrock env settings are aligned"
+    else
+      echo "claude code: settings mismatch; run: ./headway config setup claude"
+    fi
+  else
+    echo "claude code: missing $CLAUDE_CODE_SETTINGS; run: ./headway config setup claude"
   fi
   echo
 
   echo "[aws sessions]"
-  local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
-  local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
-  local aws_region="${AWS_REGION:-$DEFAULT_AWS_REGION}"
   if AWS_REGION="$aws_region" AWS_DEFAULT_REGION="$aws_region" aws sts get-caller-identity --profile "$aws_profile_name" >/dev/null 2>&1; then
     echo "AWS_PROFILE ($aws_profile_name): valid"
   else
@@ -583,7 +638,7 @@ cmd_stats() {
 
 cmd_config() {
   if [[ $# -lt 1 ]]; then
-    echo "Usage: ./headway config <regen|kilo|show>"
+    echo "Usage: ./headway config <regen|setup|show>"
     exit 1
   fi
 
@@ -597,7 +652,11 @@ cmd_config() {
       ensure_env_defaults ""
       load_env
       local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
-      local discovery_profile="${BEDROCK_DISCOVERY_PROFILE:-$aws_profile_name}"
+      if [[ -z "$aws_profile_name" ]]; then
+        echo "ERROR: AWS_PROFILE is required; set it in $ENV_FILE"
+        exit 1
+      fi
+      local discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-${BEDROCK_AWS_PROFILE:-$aws_profile_name}}"
       local region="${AWS_REGION:-$DEFAULT_AWS_REGION}"
 
       while [[ $# -gt 0 ]]; do
@@ -610,9 +669,9 @@ cmd_config() {
             aws_profile_name="$2"
             shift 2
             ;;
-          --bedrock-discovery-profile)
+          --bedrock-discovery-aws-profile|--bedrock-discovery-profile)
             if [[ $# -lt 2 || "$2" == --* ]]; then
-              echo "ERROR: --bedrock-discovery-profile requires value"
+              echo "ERROR: --bedrock-discovery-aws-profile requires value"
               exit 1
             fi
             discovery_profile="$2"
@@ -628,6 +687,41 @@ cmd_config() {
       ensure_aws_session "$discovery_profile" "$region"
       generate_config "$aws_profile_name" "$discovery_profile"
       ;;
+    setup)
+      local target="all"
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          kilo|claude|all)
+            target="$1"
+            shift
+            ;;
+          *)
+            echo "Unknown config setup arg: $1"
+            exit 1
+            ;;
+        esac
+      done
+
+      load_env
+      ensure_env_defaults ""
+      load_env
+      local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
+      if [[ -z "$aws_profile_name" ]]; then
+        echo "ERROR: AWS_PROFILE is required; set it in $ENV_FILE"
+        exit 1
+      fi
+      local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
+      local region="${AWS_REGION:-$DEFAULT_AWS_REGION}"
+
+      if [[ "$target" == "all" || "$target" == "kilo" ]]; then
+        setup_kilo_config
+        echo "kilo config updated"
+      fi
+      if [[ "$target" == "all" || "$target" == "claude" ]]; then
+        setup_claude_config "$bedrock_profile" "$region"
+        echo "claude code config updated"
+      fi
+      ;;
     kilo)
       setup_kilo_config
       echo "kilo config updated"
@@ -637,9 +731,11 @@ cmd_config() {
       echo "ENV file: $ENV_FILE"
       echo "AWS_PROFILE=${AWS_PROFILE:-<unset>}"
       echo "BEDROCK_AWS_PROFILE=${BEDROCK_AWS_PROFILE:-<unset>}"
-      echo "BEDROCK_DISCOVERY_PROFILE=${BEDROCK_DISCOVERY_PROFILE:-<unset>}"
+      echo "BEDROCK_DISCOVERY_AWS_PROFILE=${BEDROCK_DISCOVERY_AWS_PROFILE:-<unset>}"
       echo "AWS_REGION=${AWS_REGION:-<unset>}"
       echo "HEADROOM_BEDROCK_IMAGE=${HEADROOM_BEDROCK_IMAGE:-<unset>}"
+      echo "KILO_CONF=$KILO_CONF"
+      echo "CLAUDE_CODE_SETTINGS=$CLAUDE_CODE_SETTINGS"
       ;;
     *)
       echo "Unknown config subcommand: $sub"
@@ -653,6 +749,7 @@ cmd_reset() {
   local purge_data="false"
   local prune_images="false"
   local cleanup_kilo="false"
+  local cleanup_claude="false"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -672,6 +769,10 @@ cmd_reset() {
         cleanup_kilo="true"
         shift
         ;;
+      --cleanup-claude)
+        cleanup_claude="true"
+        shift
+        ;;
       *)
         echo "Unknown reset arg: $1"
         exit 1
@@ -681,7 +782,7 @@ cmd_reset() {
 
   if [[ "$yes" != "true" ]]; then
     echo "This will remove local gateway containers and .env."
-    echo "Flags: purge-data=$purge_data prune-images=$prune_images cleanup-kilo=$cleanup_kilo"
+    echo "Flags: purge-data=$purge_data prune-images=$prune_images cleanup-kilo=$cleanup_kilo cleanup-claude=$cleanup_claude"
     read -r -p "Proceed? (y/N): " ans
     if [[ ! "$ans" =~ ^[Yy]$ ]]; then
       echo "aborted"
@@ -709,6 +810,10 @@ cmd_reset() {
     cleanup_kilo_config
   fi
 
+  if [[ "$cleanup_claude" == "true" ]]; then
+    cleanup_claude_config
+  fi
+
   echo "reset complete"
 }
 
@@ -726,7 +831,7 @@ Usage: ./headway <command> [args]
 
 Commands:
   init [--aws-profile <name>] [--skip-config]
-      First-time setup (.env defaults, AWS preflight, Kilo config, model config generation)
+      First-time setup (.env defaults, AWS preflight, Kilo + Claude Code config, model config generation)
 
   up [--aws-profile <name>] [--regen-config]
       Start/reconcile stack and wait for healthy lanes
@@ -749,15 +854,16 @@ Commands:
   stats
       Print savings and usage report
 
-  config <regen|kilo|show>
+  config <regen|setup|show>
       regen: regenerate litellm_config.yaml
-      kilo:  write Kilo provider baseURLs
+        options: [--aws-profile <name>] [--bedrock-discovery-aws-profile <name>]
+      setup [kilo|claude|all]: write client config
       show:  show active env settings
 
   secret-scan
       Run local secret scan
 
-  reset [--yes] [--purge-data] [--prune-images] [--cleanup-kilo]
+  reset [--yes] [--purge-data] [--prune-images] [--cleanup-kilo] [--cleanup-claude]
       Remove stack and optional local state
 
   help

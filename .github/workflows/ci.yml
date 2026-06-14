@@ -44,7 +44,6 @@ jobs:
               - '**/*.yaml'
             relevant:
               - '**'
-              - '!**/*.md'
               - '!LICENSE'
 
   shell-checks:

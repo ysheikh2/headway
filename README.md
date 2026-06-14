@@ -42,7 +42,8 @@ Client/Extension (Bedrock native)            -> Headroom :4002 (native Bedrock r
 
 Headway is not Kilo-only.
 
-- Kilo: first-class preset via `./headway config kilo`
+- Kilo: first-class preset via `./headway config setup kilo`
+- Claude Code (VS Code): Bedrock env preset via `./headway config setup claude`
 - Claude Code: works when pointed at the same local provider endpoints
 - Other IDE/CLI extensions and tools: any client that supports OpenAI-compatible base URLs and/or Bedrock base URLs can use Headway
 
@@ -58,20 +59,18 @@ Use the repo-root CLI for all operations:
 
 Primary commands:
 
-- `init` - first-time setup (`.env`, AWS preflight, Kilo preset, model config generation)
+- `init` - first-time setup (`.env`, AWS preflight, Kilo + Claude Code presets, model config generation)
 - `up` - start/reconcile stack and wait for health
 - `down` - stop stack
 - `auth` - refresh AWS sessions and restart services (no model-config regeneration)
-- `doctor` - diagnostics (containers, health, models, Kilo preset check, AWS session status)
+- `doctor` - diagnostics (containers, health, models, client preset checks, AWS session status)
 - `test` - full end-to-end smoke tests (`scripts/cli/test.sh`)
 - `update` - pull/restart images
 - `stats` - savings/cost/cache report
 - `config regen` - regenerate `litellm_config.yaml` explicitly
-- `config kilo` - write Kilo provider base URL preset
+- `config setup [kilo|claude|all]` - write client presets (Kilo and/or Claude Code)
 - `reset` - remove stack and optional local state
 - `secret-scan` - run local secret scan
-
-## Quick Start
 
 ## Supported Systems
 
@@ -89,7 +88,7 @@ Headway requires `docker compose` and a working Docker-compatible daemon. Docker
 
 ```bash
 aws sts get-caller-identity --profile "$AWS_PROFILE"
-aws sts get-caller-identity --profile "$BEDROCK_AWS_PROFILE"
+aws sts get-caller-identity --profile "${BEDROCK_AWS_PROFILE:-$AWS_PROFILE}"
 ```
 
 3. Initialize once:
@@ -103,13 +102,19 @@ aws sts get-caller-identity --profile "$BEDROCK_AWS_PROFILE"
 - It creates `.env` if missing.
 - If required values are missing and you're in an interactive terminal, it prompts for them with sensible defaults.
 - It verifies AWS sessions and triggers SSO login when needed.
-- It writes the Kilo preset and generates `litellm_config.yaml`.
+- It writes Kilo + Claude Code presets and generates `litellm_config.yaml`.
 
 Optional first-run shortcut if you already know your AWS profile:
 
 ```bash
 ./headway init --aws-profile <your-profile>
 ```
+
+Environment profile behavior:
+
+- `AWS_PROFILE` (required): primary profile for LiteLLM lane and baseline fallback.
+- `BEDROCK_AWS_PROFILE` (optional): native Bedrock runtime profile; defaults to `AWS_PROFILE` when unset.
+- `BEDROCK_DISCOVERY_AWS_PROFILE` (optional): profile used by `./headway config regen`; defaults to `BEDROCK_AWS_PROFILE`, then `AWS_PROFILE`.
 
 4. Start stack:
 
@@ -127,19 +132,44 @@ Optional first-run shortcut if you already know your AWS profile:
 
 ## Configuration Examples
 
-Kilo preset helper:
+Set up both client presets in one command:
 
 ```bash
-./headway config kilo
+./headway config setup all
 ```
 
-That writes:
+Set up only Kilo:
+
+```bash
+./headway config setup kilo
+```
+
+Set up only Claude Code (VS Code settings):
+
+```bash
+./headway config setup claude
+```
+
+Kilo preset writes:
 
 - `github-copilot.options.baseURL = "http://127.0.0.1:4000/v1"`
 - `openai-compatible.options.baseURL = "http://127.0.0.1:4000/v1"`
 - `amazon-bedrock.options.baseURL = "http://127.0.0.1:4002"`
 
-For other tools/extensions (including Claude Code), use equivalent provider settings:
+Claude Code preset writes `claudeCode.environmentVariables` entries in VS Code settings:
+
+- `CLAUDE_CODE_USE_BEDROCK=1`
+- `AWS_PROFILE=<BEDROCK_AWS_PROFILE>`
+- `AWS_REGION=<AWS_REGION>`
+
+Model selection is intentionally left to the user in Claude Code settings.
+
+By default, Headway writes Claude Code settings to:
+
+- macOS: `~/Library/Application Support/Code/User/settings.json`
+- Override path: set `CLAUDE_CODE_SETTINGS` before running `./headway config setup claude`
+
+For other tools/extensions, use equivalent provider settings:
 
 - OpenAI-compatible base URL -> `http://127.0.0.1:4000/v1`
 - Bedrock base URL -> `http://127.0.0.1:4002`

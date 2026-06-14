@@ -7,6 +7,9 @@ Subcommands:
 - kilo-setup <kilo_conf_path>
 - kilo-cleanup <kilo_conf_path>
 - kilo-check <kilo_conf_path>
+- claude-setup <vscode_settings_path> <aws_profile> <aws_region>
+- claude-cleanup <vscode_settings_path>
+- claude-check <vscode_settings_path> <aws_profile> <aws_region>
 - compose-image <service_name>  (reads compose JSON on stdin)
 - models-summary                (reads /v1/models JSON on stdin)
 - combined-stats
@@ -33,6 +36,7 @@ BEDROCK_METRICS_URL = "http://127.0.0.1:4002/metrics"
 def _strip_jsonc_comments(text: str) -> str:
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
     text = re.sub(r"(^\s*)//.*$", "", text, flags=re.M)
+    text = re.sub(r",(\s*[}\]])", r"\1", text)
     return text
 
 
@@ -151,6 +155,119 @@ def cmd_kilo_check(kilo_conf: str) -> int:
     if br_url and br_url not in ("http://127.0.0.1:4002", "http://127.0.0.1:4002/v1"):
         return 1
 
+    return 0
+
+
+def _upsert_env_var(items: list[dict[str, Any]], name: str, value: str) -> None:
+    for item in items:
+        if isinstance(item, dict) and item.get("name") == name:
+            item["value"] = value
+            return
+    items.append({"name": name, "value": value})
+
+
+def cmd_claude_setup(vscode_settings: str, aws_profile: str, aws_region: str) -> int:
+    path = Path(vscode_settings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    data: dict[str, Any]
+    try:
+        data = _load_jsonc(path)
+    except Exception as exc:
+        print(f"failed to parse VS Code settings JSONC: {exc}", file=sys.stderr)
+        return 1
+
+    env_vars = data.get("claudeCode.environmentVariables")
+    if not isinstance(env_vars, list):
+        env_vars = []
+        data["claudeCode.environmentVariables"] = env_vars
+
+    normalized: list[dict[str, Any]] = []
+    for entry in env_vars:
+        if isinstance(entry, dict):
+            normalized.append(entry)
+    env_vars = normalized
+    data["claudeCode.environmentVariables"] = env_vars
+
+    _upsert_env_var(env_vars, "CLAUDE_CODE_USE_BEDROCK", "1")
+    _upsert_env_var(env_vars, "AWS_PROFILE", aws_profile)
+    _upsert_env_var(env_vars, "AWS_REGION", aws_region)
+
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    print(path)
+    return 0
+
+
+def cmd_claude_cleanup(vscode_settings: str) -> int:
+    path = Path(vscode_settings)
+    if not path.exists():
+        return 0
+
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        return 0
+
+    try:
+        data = json.loads(_strip_jsonc_comments(text))
+    except Exception:
+        return 0
+    if not isinstance(data, dict):
+        return 0
+
+    env_vars = data.get("claudeCode.environmentVariables")
+    if not isinstance(env_vars, list):
+        return 0
+
+    remove_names = {
+        "CLAUDE_CODE_USE_BEDROCK",
+        "AWS_PROFILE",
+        "AWS_REGION",
+    }
+    kept: list[dict[str, Any]] = []
+    for entry in env_vars:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        if isinstance(name, str) and name in remove_names:
+            continue
+        kept.append(entry)
+
+    data["claudeCode.environmentVariables"] = kept
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return 0
+
+
+def cmd_claude_check(vscode_settings: str, aws_profile: str, aws_region: str) -> int:
+    path = Path(vscode_settings)
+    if not path.exists():
+        return 1
+
+    try:
+        data = _load_jsonc(path)
+    except Exception:
+        return 1
+
+    env_vars = data.get("claudeCode.environmentVariables")
+    if not isinstance(env_vars, list):
+        return 1
+
+    expected = {
+        "CLAUDE_CODE_USE_BEDROCK": "1",
+        "AWS_PROFILE": aws_profile,
+        "AWS_REGION": aws_region,
+    }
+    seen: dict[str, str] = {}
+    for entry in env_vars:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        value = entry.get("value")
+        if isinstance(name, str) and isinstance(value, str) and name in expected and name not in seen:
+            seen[name] = value
+
+    for key, val in expected.items():
+        if seen.get(key) != val:
+            return 1
     return 0
 
 
@@ -862,6 +979,12 @@ def main() -> int:
         return cmd_kilo_cleanup(args[0])
     if sub == "kilo-check" and len(args) == 1:
         return cmd_kilo_check(args[0])
+    if sub == "claude-setup" and len(args) == 3:
+        return cmd_claude_setup(args[0], args[1], args[2])
+    if sub == "claude-cleanup" and len(args) == 1:
+        return cmd_claude_cleanup(args[0])
+    if sub == "claude-check" and len(args) == 3:
+        return cmd_claude_check(args[0], args[1], args[2])
 
     if sub == "compose-image" and len(args) == 1:
         return cmd_compose_image(args[0])

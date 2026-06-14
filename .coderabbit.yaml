@@ -12,7 +12,6 @@ reviews:
   changed_files_summary: true
   sequence_diagrams: false
   path_filters:
-    - "!**/*.md"
     - "!**/*.lock"
   auto_review:
     enabled: true
