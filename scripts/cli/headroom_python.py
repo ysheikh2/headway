@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared Python helpers for the headroom-proxy CLI.
+"""Shared Python helpers for the Headway CLI.
 
 Subcommands:
 - env-get <env_file> <key>

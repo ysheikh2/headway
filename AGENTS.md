@@ -33,7 +33,7 @@ Kilo endpoints:
 - Role: upstream provider router (Bedrock + GitHub Copilot)
 
 3. `headroom-bedrock-gateway`
-- Image: `${HEADROOM_BEDROCK_IMAGE:-ghcr.io/ysheikh2/headroom-proxy:bedrock-native}`
+- Image: `${HEADROOM_BEDROCK_IMAGE:-ghcr.io/ysheikh2/headway:bedrock-native}`
 - Port: `127.0.0.1:4002` (container `:8787`)
 - Upstream: AWS Bedrock Runtime (native Bedrock routes)
 - Auth: AWS profile chain (`BEDROCK_AWS_PROFILE`, mounted `~/.aws`)
@@ -62,7 +62,7 @@ Default: do not build custom Docker images or modify the headroom source repo.
 
 The Bedrock lane (`headroom-bedrock-gateway`) uses a Rust binary built from
 `chopratejas/headroom` via `.github/workflows/docker-bedrock-native.yml` and
-published to `ghcr.io/ysheikh2/headroom-proxy:bedrock-native`.
+published to `ghcr.io/ysheikh2/headway:bedrock-native`.
 
 ## Provider/Auth Behavior
 
