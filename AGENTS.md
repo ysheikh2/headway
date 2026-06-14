@@ -52,3 +52,13 @@ When debugging provider failures, test Copilot/OpenAI-compatible and Bedrock-nat
 
 - Keep Bedrock alias mapping flow driven by `./headway config regen`.
 - Keep edits minimal and targeted; avoid duplicating README runbook content here.
+
+## CI / Docker Build Triggers
+
+The `docker-bedrock-native` workflow builds and pushes the Bedrock Rust image. It fires on push to `main` when any of these paths change:
+
+- `Dockerfile.bedrock-native`
+- `.github/workflows/docker-bedrock-native.yml`
+- `scripts/build/**` — upstream patch scripts copied into the image at build time
+
+If you change anything under `scripts/build/`, the image rebuild is automatic. If you need to rebuild without touching those files (e.g. to pick up a new upstream headroom commit), trigger the workflow manually via GitHub Actions → Docker Bedrock Native → Run workflow.

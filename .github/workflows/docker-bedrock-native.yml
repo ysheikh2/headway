@@ -24,6 +24,7 @@ env:
     paths:
       - "Dockerfile.bedrock-native"
       - ".github/workflows/docker-bedrock-native.yml"
+      - "scripts/build/**"
 
 permissions:
   contents: read
