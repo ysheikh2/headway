@@ -18,7 +18,7 @@ Please do not publish sensitive details in public issues until a fix is availabl
 Before pushing changes, run:
 
 ```bash
-./headroom-proxy secret-scan
+./headway secret-scan
 ```
 
 The project is configured to keep runtime-sensitive files out of version control:

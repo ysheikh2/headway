@@ -5,7 +5,7 @@ ARG HEADROOM_GIT_REF=main
 
 WORKDIR /src
 
-COPY scripts/docker/patch_headroom_upstream.py /usr/local/bin/patch_headroom_upstream.py
+COPY scripts/build/headroom_upstream/patch_headroom_upstream.py /usr/local/bin/patch_headroom_upstream.py
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates git \

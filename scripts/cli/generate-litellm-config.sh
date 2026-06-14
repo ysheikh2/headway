@@ -2,7 +2,7 @@
 # generate-litellm-config.sh — auto-generate LiteLLM config from AWS Bedrock (EU regions)
 #
 # Usage:
-#   ./scripts/generate-litellm-config.sh [--aws-profile <profile>] [--bedrock-discovery-profile <profile>] [--output <path>]
+#   ./scripts/cli/generate-litellm-config.sh [--aws-profile <profile>] [--bedrock-discovery-profile <profile>] [--output <path>]
 
 set -euo pipefail
 
@@ -99,13 +99,13 @@ if [[ -z "$COPILOT_TOKEN_FILE" && -f "$DIR/.data/litellm/github_copilot/api-key.
 fi
 
 TMP_OUTPUT_FILE="$TMP_DIR/litellm_config.yaml"
-python3 "$DIR/scripts/headroom_python.py" generate-config "$TMP_DIR" "$TMP_OUTPUT_FILE" "${COPILOT_TOKEN_FILE:-}"
+python3 "$DIR/scripts/cli/headroom_python.py" generate-config "$TMP_DIR" "$TMP_OUTPUT_FILE" "${COPILOT_TOKEN_FILE:-}"
 
 BEDROCK_ALIAS_COUNT=$(grep -Ec '^  - model_name: bedrock-' "$TMP_OUTPUT_FILE" || true)
 if [[ "${BEDROCK_ALIAS_COUNT:-0}" -eq 0 ]]; then
   echo "ERROR: generated config has zero bedrock-* aliases."
   echo "Likely cause: profile '$BEDROCK_DISCOVERY_PROFILE' cannot list Bedrock models/profiles."
-  echo "Try: ./scripts/generate-litellm-config.sh --aws-profile $AWS_PROFILE_NAME --bedrock-discovery-profile <profile-with-bedrock-list-permissions>"
+  echo "Try: ./scripts/cli/generate-litellm-config.sh --aws-profile $AWS_PROFILE_NAME --bedrock-discovery-profile <profile-with-bedrock-list-permissions>"
   echo "Existing $OUTPUT_FILE was left unchanged."
   exit 1
 fi

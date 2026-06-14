@@ -7,17 +7,17 @@ Thanks for helping improve this gateway.
 1. Bootstrap and start the gateway:
 
 ```bash
-./headroom-proxy init
-./headroom-proxy up
+./headway init
+./headway up
 ```
 
 2. Make your changes.
 3. Re-run validation:
 
 ```bash
-./headroom-proxy secret-scan
-./headroom-proxy test
-./headroom-proxy doctor
+./headway secret-scan
+./headway test
+./headway doctor
 ```
 
 ## Expectations

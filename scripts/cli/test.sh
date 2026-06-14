@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test.sh — Smoke tests LiteLLM+Headroom gateway.
+# test.sh — Smoke tests Headway gateway lanes.
 # Run anytime to verify end-to-end gateway health.
 #
 # Tests:
@@ -15,7 +15,7 @@ set -euo pipefail
 GATEWAY="http://127.0.0.1:4000"
 LITELLM_ADMIN="http://127.0.0.1:4001"
 BEDROCK_NATIVE_GATEWAY="http://127.0.0.1:4002"
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PASS=0
 FAIL=0
 
@@ -188,7 +188,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "=== LiteLLM+Headroom Gateway — Smoke Tests ==="
+echo "=== Headway Gateway — Smoke Tests ==="
 echo
 
 # --- Test 2b: Bedrock headroom liveness (:4002) ---
@@ -198,7 +198,7 @@ if [[ -n "$BEDROCK_LIVE" ]]; then
   ok "Bedrock headroom liveness responded: $BEDROCK_LIVE"
 else
   fail "Bedrock headroom liveness unreachable at $BEDROCK_NATIVE_GATEWAY/healthz"
-  info "Fix: ./headroom-proxy up"
+  info "Fix: ./headway up"
 fi
 echo
 
@@ -219,7 +219,7 @@ for container in litellm-gateway headroom-gateway; do
     ok "${container} is running: $status"
   else
     fail "Container '${container}' is not running"
-    info "Fix: ./headroom-proxy up"
+    info "Fix: ./headway up"
   fi
 done
 echo
@@ -231,7 +231,7 @@ if [[ -n "$LIVE" ]]; then
   ok "Liveness responded: $LIVE"
 else
   fail "Liveness unreachable at $GATEWAY/livez"
-  info "Fix: ./headroom-proxy up"
+  info "Fix: ./headway up"
 fi
 echo
 
@@ -338,7 +338,7 @@ if [[ "$HTTP_CODE" == "200" ]] && response_has_choices "$TMPFILE"; then
 else
   ERR=$(python3 -c "import json; d=json.load(open('$TMPFILE')); print(str(d)[:200])" 2>/dev/null || head -c 200 "$TMPFILE")
   fail "Copilot request failed (HTTP $HTTP_CODE): $ERR"
-  info "Fix: ./headroom-proxy auth"
+  info "Fix: ./headway auth"
   CODE_LINE=$(docker logs litellm-gateway 2>/dev/null | grep -E 'Please visit https://github.com/login/device and enter code' | tail -1 || true)
   if [[ -n "$CODE_LINE" ]]; then
     info "Copilot device auth pending: $CODE_LINE"
@@ -404,7 +404,7 @@ print('')
 
 if [[ -z "$BEDROCK_TEST_MODEL" ]]; then
   fail "No bedrock-* model aliases found in /v1/models"
-  info "Fix: ./headroom-proxy up --regen-config"
+  info "Fix: ./headway up --regen-config"
   echo
 else
   echo "[ Test 5: AWS Bedrock end-to-end (lowest-cost model preferred: $BEDROCK_TEST_MODEL) ]"
@@ -426,7 +426,7 @@ echo
 echo "[ Test 5b: Bedrock native Converse + ConverseStream via :4002 ]"
 if [[ -z "$BEDROCK_TEST_MODEL" ]]; then
   fail "No bedrock-* model found in :4001 model list — cannot run Test 5b"
-  info "Fix: ./headroom-proxy up"
+  info "Fix: ./headway up"
 elif ! bedrock_native_routes_available "$BEDROCK_NATIVE_GATEWAY"; then
   fail "Bedrock :4002 does not expose native /model/{id}/converse routes"
   info "Image lacks native Bedrock route surface; set HEADROOM_BEDROCK_IMAGE to a native bedrock image and restart"
@@ -436,7 +436,7 @@ else
   BEDROCK_NATIVE_MODEL=$(echo "$RESOLVED" | awk '{print $1}')
   if [[ -z "$BEDROCK_NATIVE_MODEL" ]]; then
     fail "Could not resolve native model id from alias: $BEDROCK_NATIVE_ALIAS"
-    info "Fix: regenerate litellm_config.yaml via ./headroom-proxy config regen"
+    info "Fix: regenerate litellm_config.yaml via ./headway config regen"
   else
     CONVERSE_EXPECT_ANTHROPIC_COMPRESS=0
     if [[ "$BEDROCK_NATIVE_MODEL" == anthropic.* || "$BEDROCK_NATIVE_MODEL" == *.anthropic.* ]]; then
@@ -519,10 +519,10 @@ echo
 
 # --- Test 5c: Unified stats aggregation script ---
 echo "[ Test 5c: Unified stats aggregation (:4000 + :4002) ]"
-COMBINED_JSON=$(python3 "$DIR/scripts/headroom_python.py" combined-stats 2>/dev/null || true)
+COMBINED_JSON=$(python3 "$DIR/scripts/cli/headroom_python.py" combined-stats 2>/dev/null || true)
 if [[ -z "$COMBINED_JSON" ]]; then
   fail "Unified stats script returned no output"
-  info "Fix: ensure scripts/headroom_python.py is present and Python can run it"
+  info "Fix: ensure scripts/cli/headroom_python.py is present and Python can run it"
 else
   if echo "$COMBINED_JSON" | python3 -c '
 import json,sys
@@ -576,11 +576,11 @@ if errors:
     fail "kilo.jsonc provider baseURLs are not correctly set"
     info "Copilot/openai-compatible: http://127.0.0.1:4000/v1"
     info "amazon-bedrock:           http://127.0.0.1:4002"
-    info "Fix: ./headroom-proxy config kilo"
+    info "Fix: ./headway config kilo"
   fi
 else
   fail "kilo.jsonc not found at $KILO_CONF"
-  info "Fix: ./headroom-proxy config kilo"
+  info "Fix: ./headway config kilo"
 fi
 echo
 
@@ -592,8 +592,8 @@ echo
 
 if [[ $FAIL -gt 0 ]]; then
   echo "  Some tests failed. Quick fixes:"
-  echo "    Not running:  ./headroom-proxy up"
-  echo "    Auth (403):   ./headroom-proxy auth"
+  echo "    Not running:  ./headway up"
+  echo "    Auth (403):   ./headway auth"
   echo "    AWS expired:  aws sso login --profile ${BEDROCK_AWS_PROFILE:-default}"
   exit 1
 fi
