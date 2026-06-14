@@ -562,7 +562,9 @@ def _add_system_cache_control(body: dict[str, Any]) -> bool:
     # Anthropic Messages API: system is a string or list of content blocks.
     if isinstance(system, str):
         if system and "cache_control" not in body:
-            body["system"] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+            body["system"] = [
+                {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+            ]
             return True
         return False
     if isinstance(system, list) and system:
@@ -902,9 +904,7 @@ class _StreamUsageScanner:
 
     _MAX_TAIL = 65536
     _OUT_PATTERN = re.compile(rb'"(?:output_tokens|outputTokens)"\s*:\s*(\d+)')
-    _CR_PATTERN = re.compile(
-        rb'"(?:cache_read_input_tokens|cacheReadInputTokens)"\s*:\s*(\d+)'
-    )
+    _CR_PATTERN = re.compile(rb'"(?:cache_read_input_tokens|cacheReadInputTokens)"\s*:\s*(\d+)')
     _CW_PATTERN = re.compile(
         rb'"(?:cache_creation_input_tokens|cacheWriteInputTokens)"\s*:\s*(\d+)'
     )
