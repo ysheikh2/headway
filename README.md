@@ -168,8 +168,7 @@ If Bedrock aliases are stale/missing:
 
 Runtime state is persisted under this repo (gitignored):
 
-- `.data/headroom` - Copilot/OpenAI-compatible lane Headroom state
-- `.data/headroom-bedrock` - Bedrock lane Headroom state
+- `.data/headroom` - Shared Headroom state for both `:4000` and `:4002` lanes
 - `.data/litellm` - LiteLLM token/provider cache
 
 ## Bedrock Image Strategy

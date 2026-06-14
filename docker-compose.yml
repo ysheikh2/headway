@@ -8,6 +8,7 @@
 # Bedrock lane uses HEADROOM_BEDROCK_IMAGE — a Rust binary built from
 # chopratejas/headroom via docker-bedrock-native workflow and pushed to GHCR.
 # Runtime state is persisted in-repo under .data/ (gitignored).
+# Headroom state is intentionally shared across :4000 and :4002 lanes.
 
 services:
   litellm:
@@ -103,5 +104,5 @@ services:
       retries: 3
       start_period: 30s
     volumes:
-      - ./.data/headroom-bedrock:/root/.headroom
+      - ./.data/headroom:/root/.headroom
       - ${HOME}/.aws:/root/.aws
