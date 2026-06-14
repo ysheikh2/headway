@@ -8,7 +8,7 @@ dependencies = []
 [project.urls]
 Headroom = "https://github.com/chopratejas/headroom"
 LiteLLM = "https://github.com/BerriAI/litellm"
-Repository = "https://github.com/ysheikh2/headroom-proxy"
+Repository = "https://github.com/ysheikh2/headway"
 
 [dependency-groups]
 dev = [

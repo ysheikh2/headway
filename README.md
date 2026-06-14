@@ -71,8 +71,6 @@ Primary commands:
 - `reset` - remove stack and optional local state
 - `secret-scan` - run local secret scan
 
-Back-compat note: `./headroom-proxy` remains as a shim that forwards to `./headway`.
-
 ## Quick Start
 
 1. Ensure Docker Desktop is running.
@@ -177,7 +175,7 @@ Runtime state is persisted under this repo (gitignored):
 ## Bedrock Image Strategy
 
 - Copilot/OpenAI-compatible lane image: `ghcr.io/chopratejas/headroom:code`
-- Bedrock lane default image: `ghcr.io/ysheikh2/headroom-proxy:bedrock-native`
+- Bedrock lane default image: `ghcr.io/ysheikh2/headway:bedrock-native`
 - Override Bedrock lane image by setting `HEADROOM_BEDROCK_IMAGE` in `.env`
 
 ## Model Notes
@@ -211,4 +209,4 @@ Repository trust docs:
 
 - Headroom (proxy/compression core): https://github.com/chopratejas/headroom
 - LiteLLM (provider routing/gateway): https://github.com/BerriAI/litellm
-- Headway (this integration wrapper): https://github.com/ysheikh2/headroom-proxy
+- Headway (this integration wrapper): https://github.com/ysheikh2/headway

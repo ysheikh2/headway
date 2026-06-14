@@ -168,7 +168,7 @@ bedrock_log_has_for_request() {
 
 bedrock_native_routes_available() {
   local base_url="$1"
-  # Probe the /model/{id}/converse route directly — the Rust headroom-proxy
+  # Probe the /model/{id}/converse route directly — the Rust Bedrock lane
   # does not expose openapi.json (it proxies all unknown paths to upstream).
   # A 404 means the route is not mounted; any other response (200, 400, 500)
   # means the route exists and is being handled.

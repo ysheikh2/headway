@@ -11,7 +11,7 @@ PY_HELPER="$ROOT_DIR/scripts/cli/headroom_python.py"
 
 DEFAULT_AWS_REGION="eu-central-1"
 DEFAULT_AWS_PROFILE="default"
-DEFAULT_BEDROCK_IMAGE="ghcr.io/ysheikh2/headroom-proxy:bedrock-native"
+DEFAULT_BEDROCK_IMAGE="ghcr.io/ysheikh2/headway:bedrock-native"
 ENV_TEMPLATE_FILE="$ROOT_DIR/.env.template"
 
 GATEWAY_URL="http://127.0.0.1:4000"
@@ -701,8 +701,8 @@ cmd_reset() {
   if [[ "$prune_images" == "true" ]]; then
     docker image rm ghcr.io/chopratejas/headroom:code 2>/dev/null || true
     docker image rm ghcr.io/berriai/litellm:main-stable 2>/dev/null || true
-    docker image rm ghcr.io/ysheikh2/headroom-proxy:bedrock-native 2>/dev/null || true
-    docker image rm ghcr.io/ysheikh2/headroom-proxy:bedrock-native-latest 2>/dev/null || true
+    docker image rm ghcr.io/ysheikh2/headway:bedrock-native 2>/dev/null || true
+    docker image rm ghcr.io/ysheikh2/headway:bedrock-native-latest 2>/dev/null || true
   fi
 
   if [[ "$cleanup_kilo" == "true" ]]; then
