@@ -71,9 +71,9 @@ services:
       start_period: 30s
     volumes:
       - ./.data/headroom:/root/.headroom
-      - ./scripts/headroom_patch/headroom_patch:/usr/local/lib/python3.13/site-packages/headroom_patch:ro
-      - ./scripts/headroom_patch/usercustomize.py:/usr/local/lib/python3.13/site-packages/usercustomize.py:ro
-      - ./scripts/headroom_patch/dashboard.html:/usr/local/lib/python3.13/site-packages/headroom/dashboard/templates/dashboard.html:ro
+      - ./scripts/runtime/headroom/headroom_patch:/usr/local/lib/python3.13/site-packages/headroom_patch:ro
+      - ./scripts/runtime/headroom/usercustomize.py:/usr/local/lib/python3.13/site-packages/usercustomize.py:ro
+      - ./scripts/runtime/headroom/dashboard.html:/usr/local/lib/python3.13/site-packages/headroom/dashboard/templates/dashboard.html:ro
 
   headroom-bedrock:
     image: ${HEADROOM_BEDROCK_IMAGE:-ghcr.io/ysheikh2/headroom-proxy:bedrock-native}

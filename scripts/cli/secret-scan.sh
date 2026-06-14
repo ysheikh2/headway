@@ -2,7 +2,7 @@
 # secret-scan.sh — Lightweight local secret scan for this repository.
 #
 # Usage:
-#   ./scripts/secret-scan.sh
+#   ./scripts/cli/secret-scan.sh
 
 set -euo pipefail
 

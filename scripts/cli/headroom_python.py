@@ -383,25 +383,181 @@ def cmd_stats_report(raw_stats: str, raw_history: str, raw_combined: str) -> int
     requests = stats.get("requests", {})
     cost = summary.get("cost", {})
 
+    def _fmt_pct(numerator: float, denominator: float) -> str:
+        if denominator <= 0:
+            return "n/a"
+        return f"{(100.0 * numerator / denominator):.2f}%"
+
+    def _fmt_float_pct(value: Any) -> str:
+        if isinstance(value, (int, float)):
+            return f"{float(value):.2f}%"
+        return "n/a"
+
+    def _fmt_usd(value: Any) -> str:
+        if isinstance(value, (int, float)):
+            return f"${float(value):.6f}"
+        return "n/a"
+
+    def _safe_int(value: Any) -> int:
+        return int(value) if isinstance(value, (int, float)) else 0
+
     print("=== Headroom Savings Report ===")
     if isinstance(combined, dict) and combined.get("ok"):
         unified = combined.get("unified", {})
         print(f"Unified API requests: {unified.get('api_requests', 0)}")
         print(f"Unified tokens saved: {unified.get('tokens_saved', 0)}")
 
+        lanes = combined.get("lanes", {}) if isinstance(combined.get("lanes"), dict) else {}
+        copilot_lane = lanes.get("copilot", {}) if isinstance(lanes.get("copilot"), dict) else {}
+        bedrock_lane = (
+            lanes.get("bedrock_native", {}) if isinstance(lanes.get("bedrock_native"), dict) else {}
+        )
+        print(
+            "Unified lanes: "
+            f"copilot(saved={copilot_lane.get('tokens_saved', 0)}, cached={copilot_lane.get('requests_cached', 0)}) "
+            f"bedrock(saved={bedrock_lane.get('tokens_saved', 0)}, cached={bedrock_lane.get('requests_cached', 0)})"
+        )
+        if (
+            bedrock_lane.get("available") is True
+            and _safe_int(bedrock_lane.get("api_requests")) > 0
+            and _safe_int(bedrock_lane.get("tokens_saved")) == 0
+        ):
+            print(
+                "Bedrock lane note: request counts are visible, but token/cost savings are "
+                "not exposed by current :4002 metrics yet."
+            )
+
     print(f"API requests: {summary.get('api_requests', 0)}")
     print(f"Input tokens: {tokens.get('input', 0)}")
     print(f"Output tokens: {tokens.get('output', 0)}")
     print(f"Saved tokens: {tokens.get('saved', 0)}")
     print(f"Cached requests: {requests.get('cached', 0)}")
-    print(f"Cost without headroom: ${cost.get('without_headroom_usd', 0.0):.6f}")
-    print(f"Cost with headroom: ${cost.get('with_headroom_usd', 0.0):.6f}")
-    print(f"Total saved USD: ${cost.get('total_saved_usd', 0.0):.6f}")
+    print(
+        f"Cache hit rate: {_fmt_pct(float(_safe_int(requests.get('cached', 0))), float(_safe_int(summary.get('api_requests', 0))))}"
+    )
+    print(
+        f"Active token savings: {_fmt_float_pct(tokens.get('savings_percent'))} "
+        f"(proxy-only: {_fmt_float_pct(tokens.get('proxy_savings_percent'))})"
+    )
+
+    compression = (
+        summary.get("compression", {}) if isinstance(summary.get("compression"), dict) else {}
+    )
+    print(
+        "Compression details: "
+        f"requests_compressed={compression.get('requests_compressed', 0)}, "
+        f"avg={_fmt_float_pct(compression.get('avg_compression_pct'))}, "
+        f"best={_fmt_float_pct(compression.get('best_compression_pct'))}, "
+        f"best_detail={compression.get('best_detail', 'n/a')}"
+    )
+
+    print(f"Cost without headroom: {_fmt_usd(cost.get('without_headroom_usd'))}")
+    print(f"Cost with headroom: {_fmt_usd(cost.get('with_headroom_usd'))}")
+    print(f"Total saved USD: {_fmt_usd(cost.get('total_saved_usd'))}")
+
+    breakdown = cost.get("breakdown", {}) if isinstance(cost.get("breakdown"), dict) else {}
+    if breakdown:
+        print(
+            "Cost breakdown: "
+            f"compression={_fmt_usd(breakdown.get('compression_savings_usd'))}, "
+            f"cache={_fmt_usd(breakdown.get('cache_savings_usd'))}"
+        )
+
+    cost_block = stats.get("cost", {}) if isinstance(stats.get("cost"), dict) else {}
+    per_model = (
+        cost_block.get("per_model", {}) if isinstance(cost_block.get("per_model"), dict) else {}
+    )
+    if per_model:
+        print("Top models by token savings:")
+        rows: list[tuple[str, int, float, int, float]] = []
+        for model, model_stats in per_model.items():
+            if not isinstance(model_stats, dict):
+                continue
+            rows.append(
+                (
+                    str(model),
+                    _safe_int(model_stats.get("tokens_saved")),
+                    float(model_stats.get("reduction_pct", 0.0) or 0.0),
+                    _safe_int(model_stats.get("requests")),
+                    float(model_stats.get("tokens_sent", 0.0) or 0.0),
+                )
+            )
+        rows.sort(key=lambda item: item[1], reverse=True)
+        for model, saved_toks, reduction_pct, reqs, sent_toks in rows[:6]:
+            print(
+                f"  - {model}: saved={saved_toks}, reduction={reduction_pct:.2f}%, "
+                f"requests={reqs}, sent={int(sent_toks)}"
+            )
+
+        zero_usd_models = [
+            m
+            for m, ms in per_model.items()
+            if isinstance(ms, dict)
+            and _safe_int(ms.get("tokens_saved")) > 0
+            and float(ms.get("reduction_pct", 0.0) or 0.0) > 0
+            and float(ms.get("tokens_sent", 0.0) or 0.0) > 0
+            and (
+                float(cost.get("total_saved_usd", 0.0) or 0.0) == 0.0
+                or float(cost_block.get("compression_savings_usd", 0.0) or 0.0) == 0.0
+            )
+        ]
+        if zero_usd_models:
+            print(
+                "Note: token savings are present but USD savings are zero. "
+                "This usually means missing/unknown price metadata for one or more models."
+            )
+
+    request_logs = stats.get("request_logs") if isinstance(stats.get("request_logs"), list) else []
+    if request_logs:
+        model_rollup: dict[str, dict[str, float]] = {}
+        for row in request_logs:
+            if not isinstance(row, dict):
+                continue
+            model = str(row.get("model", "unknown"))
+            slot = model_rollup.setdefault(
+                model,
+                {
+                    "requests": 0.0,
+                    "cache_hits": 0.0,
+                    "tokens_saved": 0.0,
+                    "input_original": 0.0,
+                    "input_optimized": 0.0,
+                },
+            )
+            slot["requests"] += 1.0
+            if bool(row.get("cache_hit")):
+                slot["cache_hits"] += 1.0
+            slot["tokens_saved"] += float(row.get("tokens_saved", 0.0) or 0.0)
+            slot["input_original"] += float(row.get("input_tokens_original", 0.0) or 0.0)
+            slot["input_optimized"] += float(row.get("input_tokens_optimized", 0.0) or 0.0)
+
+        ranked = sorted(
+            model_rollup.items(),
+            key=lambda kv: (int(kv[1]["requests"]), float(kv[1]["tokens_saved"])),
+            reverse=True,
+        )
+        print("Model-level recent behavior (from request logs):")
+        for model, data in ranked[:6]:
+            reqs = int(data["requests"])
+            cache_hits = int(data["cache_hits"])
+            cache_hit_pct = _fmt_pct(float(cache_hits), float(reqs))
+            saved = int(data["tokens_saved"])
+            reduction_pct = _fmt_pct(
+                float(saved),
+                float(data["input_original"]),
+            )
+            print(
+                f"  - {model}: req={reqs}, cache_hit={cache_hits}/{reqs} ({cache_hit_pct}), "
+                f"saved={saved} ({reduction_pct})"
+            )
 
     if isinstance(history, dict) and history.get("display_session"):
         ds = history.get("display_session", {})
         print(f"Session requests: {ds.get('requests', 0)}")
         print(f"Session tokens saved: {ds.get('tokens_saved', 0)}")
+        if isinstance(ds, dict):
+            print(f"Session compression USD: {_fmt_usd(ds.get('compression_savings_usd'))}")
+            print(f"Session savings percent: {_fmt_float_pct(ds.get('savings_percent'))}")
 
     return 0
 
@@ -644,7 +800,7 @@ def cmd_generate_config(tmp_dir: str, output_file: str, copilot_token_file: str)
     copilot_models = _fetch_copilot_models(copilot_token_file)
 
     header = """# litellm_config.yaml
-# AUTO-GENERATED by scripts/generate-litellm-config.sh
+# AUTO-GENERATED by scripts/cli/generate-litellm-config.sh
 #
 # Architecture:
 #   bedrock-*   -> AWS Bedrock directly
@@ -652,7 +808,7 @@ def cmd_generate_config(tmp_dir: str, output_file: str, copilot_token_file: str)
 #   *           -> github_copilot/* (wildcard fallback)
 #
 # Do not edit this file manually; regenerate with:
-#   ./scripts/generate-litellm-config.sh
+#   ./scripts/cli/generate-litellm-config.sh
 
 model_list:
 """

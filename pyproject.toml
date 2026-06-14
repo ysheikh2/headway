@@ -1,9 +1,14 @@
 [project]
-name = "headroom-proxy-dev"
+name = "headway"
 version = "0.1.0"
-description = "Dev tooling for the headroom-proxy repo (linting, type checking)"
+description = "Local AI gateway for Kilo, built on Headroom and LiteLLM."
 requires-python = ">=3.11"
 dependencies = []
+
+[project.urls]
+Headroom = "https://github.com/chopratejas/headroom"
+LiteLLM = "https://github.com/BerriAI/litellm"
+Repository = "https://github.com/ysheikh2/headroom-proxy"
 
 [dependency-groups]
 dev = [

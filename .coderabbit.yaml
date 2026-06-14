@@ -1,0 +1,26 @@
+language: "en-US"
+
+reviews:
+  profile: "assertive"
+  request_changes_workflow: false
+  high_level_summary: true
+  high_level_summary_placeholder: "@coderabbitai summary"
+  auto_title_placeholder: "@coderabbitai"
+  auto_title_instruction: ""
+  review_status: true
+  collapse_walkthrough: false
+  changed_files_summary: true
+  sequence_diagrams: false
+  path_filters:
+    - "!**/*.md"
+    - "!**/*.lock"
+  auto_review:
+    enabled: true
+    drafts: false
+  tools:
+    github-checks:
+      enabled: true
+      timeout_ms: 600000
+
+chat:
+  auto_reply: true

@@ -1,0 +1,821 @@
+#!/usr/bin/env bash
+# headway - CLI for Headway (local AI gateway for Kilo, built on Headroom + LiteLLM).
+
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
+ENV_FILE="$ROOT_DIR/.env"
+KILO_CONF="$HOME/.config/kilo/kilo.jsonc"
+PY_HELPER="$ROOT_DIR/scripts/cli/headroom_python.py"
+
+DEFAULT_AWS_REGION="eu-central-1"
+DEFAULT_AWS_PROFILE="default"
+DEFAULT_BEDROCK_IMAGE="ghcr.io/ysheikh2/headroom-proxy:bedrock-native"
+ENV_TEMPLATE_FILE="$ROOT_DIR/.env.template"
+
+GATEWAY_URL="http://127.0.0.1:4000"
+BEDROCK_URL="http://127.0.0.1:4002"
+LITELLM_ADMIN_URL="http://127.0.0.1:4001"
+
+load_env() {
+  if [[ -f "$ENV_FILE" ]]; then
+    set -o allexport
+    # shellcheck source=/dev/null
+    source "$ENV_FILE"
+    set +o allexport
+  fi
+}
+
+require_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "ERROR: missing required command: $1"
+    exit 1
+  fi
+}
+
+require_docker() {
+  if ! docker info >/dev/null 2>&1; then
+    echo "ERROR: Docker is not running. Start Docker Desktop and retry."
+    exit 1
+  fi
+}
+
+iter_env_template_pairs() {
+  if [[ -f "$ENV_TEMPLATE_FILE" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      [[ -z "$line" ]] && continue
+      [[ "$line" =~ ^[[:space:]]*# ]] && continue
+      [[ "$line" != *"="* ]] && continue
+      local key="${line%%=*}"
+      local value="${line#*=}"
+      [[ -z "$key" ]] && continue
+      printf '%s=%s\n' "$key" "$value"
+    done <"$ENV_TEMPLATE_FILE"
+    return 0
+  fi
+
+  # Fallback defaults if template is missing.
+  printf '%s\n' "AWS_PROFILE=$DEFAULT_AWS_PROFILE"
+  printf '%s\n' "BEDROCK_AWS_PROFILE=$DEFAULT_AWS_PROFILE"
+  printf '%s\n' "BEDROCK_DISCOVERY_PROFILE=$DEFAULT_AWS_PROFILE"
+  printf '%s\n' "AWS_REGION=$DEFAULT_AWS_REGION"
+  printf '%s\n' "HEADROOM_BEDROCK_IMAGE=$DEFAULT_BEDROCK_IMAGE"
+}
+
+env_template_keys() {
+  local pair
+  while IFS= read -r pair; do
+    echo "${pair%%=*}"
+  done < <(iter_env_template_pairs)
+}
+
+env_template_default_for_key() {
+  local target_key="$1"
+  local pair
+  while IFS= read -r pair; do
+    local key="${pair%%=*}"
+    local value="${pair#*=}"
+    if [[ "$key" == "$target_key" ]]; then
+      echo "$value"
+      return 0
+    fi
+  done < <(iter_env_template_pairs)
+  return 1
+}
+
+prompt_label_for_env_key() {
+  local key="$1"
+  case "$key" in
+    AWS_PROFILE)
+      echo "AWS profile (LiteLLM lane)"
+      ;;
+    BEDROCK_AWS_PROFILE)
+      echo "Bedrock AWS profile"
+      ;;
+    BEDROCK_DISCOVERY_PROFILE)
+      echo "Bedrock discovery profile"
+      ;;
+    AWS_REGION)
+      echo "AWS region"
+      ;;
+    HEADROOM_BEDROCK_IMAGE)
+      echo "Bedrock lane image"
+      ;;
+    *)
+      echo "$key"
+      ;;
+  esac
+}
+
+ensure_env_defaults() {
+  local aws_profile_override="${1:-}"
+
+  [[ -f "$ENV_FILE" ]] || touch "$ENV_FILE"
+
+  local pair key value
+  while IFS= read -r pair; do
+    key="${pair%%=*}"
+    value="${pair#*=}"
+    append_if_missing "$key" "$value"
+  done < <(iter_env_template_pairs)
+
+  if [[ -n "$aws_profile_override" ]]; then
+    set_env_key "AWS_PROFILE" "$aws_profile_override"
+    set_env_key "BEDROCK_AWS_PROFILE" "$aws_profile_override"
+    set_env_key "BEDROCK_DISCOVERY_PROFILE" "$aws_profile_override"
+  fi
+
+  # Migrate legacy local pinned image to rolling remote tag.
+  local current_image
+  current_image=$(get_env_key "HEADROOM_BEDROCK_IMAGE")
+  if [[ "$current_image" == "headroom-local:bedrock-b08ec15-sso-esdefault" ]]; then
+    set_env_key "HEADROOM_BEDROCK_IMAGE" "$DEFAULT_BEDROCK_IMAGE"
+    echo "migrated HEADROOM_BEDROCK_IMAGE to $DEFAULT_BEDROCK_IMAGE"
+  fi
+}
+
+append_if_missing() {
+  local key="$1"
+  local value="$2"
+  if ! grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
+    echo "${key}=${value}" >>"$ENV_FILE"
+  fi
+}
+
+prompt_with_default() {
+  local label="$1"
+  local default_value="$2"
+  local input=""
+
+  read -r -p "$label [$default_value]: " input
+  if [[ -z "$input" ]]; then
+    echo "$default_value"
+  else
+    echo "$input"
+  fi
+}
+
+run_init_questionnaire_if_needed() {
+  local aws_profile_override="${1:-}"
+
+  [[ -f "$ENV_FILE" ]] || touch "$ENV_FILE"
+
+  if [[ -n "$aws_profile_override" ]]; then
+    return 0
+  fi
+
+  local missing="false"
+  local key
+  while IFS= read -r key; do
+    if [[ -z "$(get_env_key "$key")" ]]; then
+      missing="true"
+      break
+    fi
+  done < <(env_template_keys)
+
+  if [[ "$missing" != "true" ]]; then
+    return 0
+  fi
+
+  if [[ ! -t 0 ]]; then
+    echo "Missing .env values detected; using defaults (non-interactive mode)."
+    return 0
+  fi
+
+  echo "Missing .env values detected. Running quick setup prompts (press Enter to accept defaults)."
+
+  local aws_profile="$(get_env_key "AWS_PROFILE")"
+  while IFS= read -r key; do
+    local current
+    current="$(get_env_key "$key")"
+    if [[ -n "$current" ]]; then
+      continue
+    fi
+
+    local default_value
+    default_value="$(env_template_default_for_key "$key" || true)"
+    if [[ "$key" == "BEDROCK_AWS_PROFILE" || "$key" == "BEDROCK_DISCOVERY_PROFILE" ]]; then
+      if [[ -n "$aws_profile" ]]; then
+        default_value="$aws_profile"
+      fi
+    fi
+
+    local label
+    label="$(prompt_label_for_env_key "$key")"
+    local answer
+    answer="$(prompt_with_default "$label" "$default_value")"
+    set_env_key "$key" "$answer"
+
+    if [[ "$key" == "AWS_PROFILE" ]]; then
+      aws_profile="$answer"
+    fi
+  done < <(env_template_keys)
+}
+
+set_env_key() {
+  local key="$1"
+  local value="$2"
+  python3 "$PY_HELPER" env-set "$ENV_FILE" "$key" "$value"
+}
+
+get_env_key() {
+  local key="$1"
+  python3 "$PY_HELPER" env-get "$ENV_FILE" "$key"
+}
+
+wait_for_http() {
+  local url="$1"
+  local attempts="${2:-30}"
+  local delay="${3:-2}"
+  local out=""
+  local i
+  for ((i = 1; i <= attempts; i++)); do
+    out=$(curl -sf --max-time 4 "$url" 2>/dev/null || true)
+    if [[ -n "$out" ]]; then
+      echo "$out"
+      return 0
+    fi
+    sleep "$delay"
+  done
+  return 1
+}
+
+ensure_aws_session() {
+  local profile="$1"
+  local region="$2"
+  if ! AWS_REGION="$region" AWS_DEFAULT_REGION="$region" aws sts get-caller-identity --profile "$profile" >/dev/null 2>&1; then
+    echo "AWS SSO expired for profile '$profile'. Launching login."
+    aws sso login --profile "$profile"
+  fi
+}
+
+compose_pull() {
+  docker compose -f "$COMPOSE_FILE" pull litellm headroom
+  local bedrock_image
+  bedrock_image=$(docker compose -f "$COMPOSE_FILE" config --format json 2>/dev/null |
+    python3 "$PY_HELPER" compose-image headroom-bedrock 2>/dev/null || true)
+  if [[ -n "$bedrock_image" && "$bedrock_image" == *"/"* ]]; then
+    docker compose -f "$COMPOSE_FILE" pull headroom-bedrock
+  else
+    echo "Skipping pull for local headroom-bedrock image: ${bedrock_image:-<unset>}"
+  fi
+}
+
+setup_kilo_config() {
+  mkdir -p "$(dirname "$KILO_CONF")"
+  if [[ -f "$KILO_CONF" ]]; then
+    cp "$KILO_CONF" "$KILO_CONF.bak-$(date +%Y%m%d-%H%M%S)"
+  fi
+  python3 "$PY_HELPER" kilo-setup "$KILO_CONF"
+}
+
+cleanup_kilo_config() {
+  if [[ ! -f "$KILO_CONF" ]]; then
+    return 0
+  fi
+  python3 "$PY_HELPER" kilo-cleanup "$KILO_CONF"
+}
+
+generate_config() {
+  local aws_profile="$1"
+  local discovery_profile="$2"
+  bash "$ROOT_DIR/scripts/cli/generate-litellm-config.sh" \
+    --aws-profile "$aws_profile" \
+    --bedrock-discovery-profile "$discovery_profile" \
+    --output "$ROOT_DIR/litellm_config.yaml"
+}
+
+print_device_hint() {
+  local code_line
+  code_line=$(docker logs litellm-gateway 2>/dev/null | grep -E 'Please visit https://github.com/login/device and enter code' | tail -1 || true)
+  if [[ -n "$code_line" ]]; then
+    echo "Copilot device auth pending:"
+    echo "  $code_line"
+    echo "  Open: https://github.com/login/device"
+  fi
+}
+
+cmd_init() {
+  local aws_profile_override=""
+  local skip_config="false"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --aws-profile)
+        if [[ $# -lt 2 || "$2" == --* ]]; then
+          echo "ERROR: --aws-profile requires value"
+          exit 1
+        fi
+        aws_profile_override="$2"
+        shift 2
+        ;;
+      --skip-config)
+        skip_config="true"
+        shift
+        ;;
+      *)
+        echo "Unknown init arg: $1"
+        exit 1
+        ;;
+    esac
+  done
+
+  require_cmd python3
+  require_cmd aws
+  require_docker
+
+  load_env
+  run_init_questionnaire_if_needed "$aws_profile_override"
+  ensure_env_defaults "$aws_profile_override"
+  load_env
+
+  local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
+  local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
+  local discovery_profile="${BEDROCK_DISCOVERY_PROFILE:-$aws_profile_name}"
+  local aws_region="${AWS_REGION:-$DEFAULT_AWS_REGION}"
+
+  ensure_aws_session "$aws_profile_name" "$aws_region"
+  ensure_aws_session "$bedrock_profile" "$aws_region"
+  ensure_aws_session "$discovery_profile" "$aws_region"
+
+  setup_kilo_config
+
+  if [[ "$skip_config" != "true" ]]; then
+    generate_config "$aws_profile_name" "$discovery_profile"
+  fi
+
+  echo "init complete"
+  echo "- AWS_PROFILE: $aws_profile_name"
+  echo "- BEDROCK_AWS_PROFILE: $bedrock_profile"
+  echo "- BEDROCK_DISCOVERY_PROFILE: $discovery_profile"
+  echo "- AWS_REGION: $aws_region"
+}
+
+cmd_up() {
+  local aws_profile_override=""
+  local regen_config="false"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --aws-profile)
+        if [[ $# -lt 2 || "$2" == --* ]]; then
+          echo "ERROR: --aws-profile requires value"
+          exit 1
+        fi
+        aws_profile_override="$2"
+        shift 2
+        ;;
+      --regen-config)
+        regen_config="true"
+        shift
+        ;;
+      *)
+        echo "Unknown up arg: $1"
+        exit 1
+        ;;
+    esac
+  done
+
+  require_cmd python3
+  require_cmd aws
+  require_docker
+
+  load_env
+  ensure_env_defaults "$aws_profile_override"
+  load_env
+
+  local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
+  local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
+  local discovery_profile="${BEDROCK_DISCOVERY_PROFILE:-$aws_profile_name}"
+  local aws_region="${AWS_REGION:-$DEFAULT_AWS_REGION}"
+
+  ensure_aws_session "$aws_profile_name" "$aws_region"
+  ensure_aws_session "$bedrock_profile" "$aws_region"
+
+  if [[ "$regen_config" == "true" || ! -s "$ROOT_DIR/litellm_config.yaml" ]]; then
+    ensure_aws_session "$discovery_profile" "$aws_region"
+    generate_config "$aws_profile_name" "$discovery_profile"
+  fi
+
+  compose_pull
+  docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
+
+  if ! wait_for_http "$GATEWAY_URL/livez" 30 2 >/dev/null; then
+    echo "ERROR: gateway did not become healthy at $GATEWAY_URL/livez"
+    exit 1
+  fi
+  if ! wait_for_http "$BEDROCK_URL/healthz" 30 2 >/dev/null; then
+    echo "ERROR: bedrock lane did not become healthy at $BEDROCK_URL/healthz"
+    exit 1
+  fi
+
+  echo "gateway is up"
+}
+
+cmd_down() {
+  require_docker
+  docker compose -f "$COMPOSE_FILE" down
+  echo "gateway is down"
+}
+
+cmd_update() {
+  local regen_config="false"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --regen-config)
+        regen_config="true"
+        shift
+        ;;
+      *)
+        echo "Unknown update arg: $1"
+        exit 1
+        ;;
+    esac
+  done
+
+  require_cmd aws
+  require_cmd python3
+  require_docker
+  load_env
+  ensure_env_defaults ""
+  load_env
+
+  local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
+  local discovery_profile="${BEDROCK_DISCOVERY_PROFILE:-$aws_profile_name}"
+  local aws_region="${AWS_REGION:-$DEFAULT_AWS_REGION}"
+
+  if [[ "$regen_config" == "true" ]]; then
+    ensure_aws_session "$discovery_profile" "$aws_region"
+    generate_config "$aws_profile_name" "$discovery_profile"
+  fi
+
+  compose_pull
+  docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
+
+  wait_for_http "$GATEWAY_URL/livez" 20 2 >/dev/null || {
+    echo "ERROR: gateway failed health check after update"
+    exit 1
+  }
+  wait_for_http "$BEDROCK_URL/healthz" 20 2 >/dev/null || {
+    echo "ERROR: bedrock lane failed health check after update"
+    exit 1
+  }
+
+  echo "update complete"
+}
+
+cmd_auth() {
+  require_cmd aws
+  require_cmd python3
+  require_docker
+
+  load_env
+  ensure_env_defaults ""
+  load_env
+
+  local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
+  local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
+  local aws_region="${AWS_REGION:-$DEFAULT_AWS_REGION}"
+
+  ensure_aws_session "$aws_profile_name" "$aws_region"
+  ensure_aws_session "$bedrock_profile" "$aws_region"
+
+  docker rm -f litellm-gateway headroom-gateway 2>/dev/null || true
+  docker compose -f "$COMPOSE_FILE" up -d litellm headroom
+
+  docker rm -f headroom-bedrock-gateway 2>/dev/null || true
+  if ! docker compose -f "$COMPOSE_FILE" up -d headroom-bedrock; then
+    echo "WARNING: bedrock lane failed to start; Copilot lane is still running"
+  fi
+
+  wait_for_http "$GATEWAY_URL/livez" 30 2 >/dev/null || {
+    echo "ERROR: gateway failed to become healthy"
+    print_device_hint
+    exit 1
+  }
+
+  print_device_hint
+  echo "auth refresh complete"
+}
+
+cmd_doctor() {
+  require_cmd aws
+  require_cmd curl
+  require_cmd python3
+  require_docker
+  load_env
+
+  echo "=== headway doctor ==="
+  echo
+
+  echo "[containers]"
+  docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep -E 'headroom-gateway|litellm-gateway|headroom-bedrock-gateway' || true
+  echo
+
+  echo "[health]"
+  local live bedrock
+  live=$(curl -sf --max-time 5 "$GATEWAY_URL/livez" 2>/dev/null || true)
+  bedrock=$(curl -sf --max-time 5 "$BEDROCK_URL/healthz" 2>/dev/null || true)
+  if [[ -n "$live" ]]; then
+    echo "copilot lane healthy: yes"
+  else
+    echo "copilot lane healthy: no"
+  fi
+  if [[ -n "$bedrock" ]]; then
+    echo "bedrock lane healthy: yes"
+  else
+    echo "bedrock lane healthy: no"
+  fi
+  echo
+
+  echo "[models]"
+  local models
+  models=$(curl -sf --max-time 8 "$GATEWAY_URL/v1/models" 2>/dev/null || curl -sf --max-time 8 "$LITELLM_ADMIN_URL/v1/models" 2>/dev/null || true)
+  if [[ -n "$models" ]]; then
+    echo "$models" | python3 "$PY_HELPER" models-summary 2>/dev/null || echo "unable to parse model list"
+  else
+    echo "unable to fetch model list"
+  fi
+  echo
+
+  echo "[kilo config]"
+  if [[ -f "$KILO_CONF" ]]; then
+    if python3 "$PY_HELPER" kilo-check "$KILO_CONF" >/dev/null 2>&1; then
+      echo "baseURL settings are aligned"
+    else
+      echo "baseURL settings mismatch; run: ./headway config kilo"
+    fi
+  else
+    echo "missing $KILO_CONF; run: ./headway config kilo"
+  fi
+  echo
+
+  echo "[aws sessions]"
+  local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
+  local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
+  local aws_region="${AWS_REGION:-$DEFAULT_AWS_REGION}"
+  if AWS_REGION="$aws_region" AWS_DEFAULT_REGION="$aws_region" aws sts get-caller-identity --profile "$aws_profile_name" >/dev/null 2>&1; then
+    echo "AWS_PROFILE ($aws_profile_name): valid"
+  else
+    echo "AWS_PROFILE ($aws_profile_name): expired"
+  fi
+  if AWS_REGION="$aws_region" AWS_DEFAULT_REGION="$aws_region" aws sts get-caller-identity --profile "$bedrock_profile" >/dev/null 2>&1; then
+    echo "BEDROCK_AWS_PROFILE ($bedrock_profile): valid"
+  else
+    echo "BEDROCK_AWS_PROFILE ($bedrock_profile): expired"
+  fi
+}
+
+cmd_stats() {
+  local raw_combined raw_stats raw_history
+  raw_combined=$(python3 "$PY_HELPER" combined-stats 2>/dev/null || true)
+  raw_stats=$(curl -sS --max-time 8 "$GATEWAY_URL/stats" 2>/dev/null || true)
+  raw_history=$(curl -sS --max-time 8 "$GATEWAY_URL/stats-history" 2>/dev/null || true)
+
+  if [[ -z "$raw_stats" ]]; then
+    echo "ERROR: could not fetch stats from $GATEWAY_URL/stats"
+    exit 1
+  fi
+
+  python3 "$PY_HELPER" stats-report "$raw_stats" "$raw_history" "$raw_combined"
+}
+
+cmd_config() {
+  if [[ $# -lt 1 ]]; then
+    echo "Usage: ./headway config <regen|kilo|show>"
+    exit 1
+  fi
+
+  local sub="$1"
+  shift
+  case "$sub" in
+    regen)
+      require_cmd aws
+      require_cmd python3
+      load_env
+      ensure_env_defaults ""
+      load_env
+      local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
+      local discovery_profile="${BEDROCK_DISCOVERY_PROFILE:-$aws_profile_name}"
+      local region="${AWS_REGION:-$DEFAULT_AWS_REGION}"
+
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --aws-profile)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+              echo "ERROR: --aws-profile requires value"
+              exit 1
+            fi
+            aws_profile_name="$2"
+            shift 2
+            ;;
+          --bedrock-discovery-profile)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+              echo "ERROR: --bedrock-discovery-profile requires value"
+              exit 1
+            fi
+            discovery_profile="$2"
+            shift 2
+            ;;
+          *)
+            echo "Unknown config regen arg: $1"
+            exit 1
+            ;;
+        esac
+      done
+
+      ensure_aws_session "$discovery_profile" "$region"
+      generate_config "$aws_profile_name" "$discovery_profile"
+      ;;
+    kilo)
+      setup_kilo_config
+      echo "kilo config updated"
+      ;;
+    show)
+      load_env
+      echo "ENV file: $ENV_FILE"
+      echo "AWS_PROFILE=${AWS_PROFILE:-<unset>}"
+      echo "BEDROCK_AWS_PROFILE=${BEDROCK_AWS_PROFILE:-<unset>}"
+      echo "BEDROCK_DISCOVERY_PROFILE=${BEDROCK_DISCOVERY_PROFILE:-<unset>}"
+      echo "AWS_REGION=${AWS_REGION:-<unset>}"
+      echo "HEADROOM_BEDROCK_IMAGE=${HEADROOM_BEDROCK_IMAGE:-<unset>}"
+      ;;
+    *)
+      echo "Unknown config subcommand: $sub"
+      exit 1
+      ;;
+  esac
+}
+
+cmd_reset() {
+  local yes="false"
+  local purge_data="false"
+  local prune_images="false"
+  local cleanup_kilo="false"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --yes)
+        yes="true"
+        shift
+        ;;
+      --purge-data)
+        purge_data="true"
+        shift
+        ;;
+      --prune-images)
+        prune_images="true"
+        shift
+        ;;
+      --cleanup-kilo)
+        cleanup_kilo="true"
+        shift
+        ;;
+      *)
+        echo "Unknown reset arg: $1"
+        exit 1
+        ;;
+    esac
+  done
+
+  if [[ "$yes" != "true" ]]; then
+    echo "This will remove local gateway containers and .env."
+    echo "Flags: purge-data=$purge_data prune-images=$prune_images cleanup-kilo=$cleanup_kilo"
+    read -r -p "Proceed? (y/N): " ans
+    if [[ ! "$ans" =~ ^[Yy]$ ]]; then
+      echo "aborted"
+      exit 0
+    fi
+  fi
+
+  require_docker
+  docker compose -f "$COMPOSE_FILE" down --remove-orphans 2>/dev/null || true
+  docker rm -f headroom-gateway litellm-gateway headroom-bedrock-gateway 2>/dev/null || true
+  rm -f "$ENV_FILE"
+
+  if [[ "$purge_data" == "true" ]]; then
+    rm -rf "$ROOT_DIR/.data"
+  fi
+
+  if [[ "$prune_images" == "true" ]]; then
+    docker image rm ghcr.io/chopratejas/headroom:code 2>/dev/null || true
+    docker image rm ghcr.io/berriai/litellm:main-stable 2>/dev/null || true
+    docker image rm ghcr.io/ysheikh2/headroom-proxy:bedrock-native 2>/dev/null || true
+    docker image rm ghcr.io/ysheikh2/headroom-proxy:bedrock-native-latest 2>/dev/null || true
+  fi
+
+  if [[ "$cleanup_kilo" == "true" ]]; then
+    cleanup_kilo_config
+  fi
+
+  echo "reset complete"
+}
+
+cmd_test() {
+  exec bash "$ROOT_DIR/scripts/cli/test.sh" "$@"
+}
+
+cmd_secret_scan() {
+  exec bash "$ROOT_DIR/scripts/cli/secret-scan.sh" "$@"
+}
+
+print_help() {
+  cat <<'EOF'
+Usage: ./headway <command> [args]
+
+Commands:
+  init [--aws-profile <name>] [--skip-config]
+      First-time setup (.env defaults, AWS preflight, Kilo config, model config generation)
+
+  up [--aws-profile <name>] [--regen-config]
+      Start/reconcile stack and wait for healthy lanes
+
+  down
+      Stop stack
+
+  auth
+      Refresh AWS sessions and restart services without regenerating litellm_config.yaml
+
+  doctor
+      Health and configuration diagnostics
+
+  test
+      Run full end-to-end smoke test suite (scripts/cli/test.sh)
+
+  update [--regen-config]
+      Pull images and restart stack
+
+  stats
+      Print savings and usage report
+
+  config <regen|kilo|show>
+      regen: regenerate litellm_config.yaml
+      kilo:  write Kilo provider baseURLs
+      show:  show active env settings
+
+  secret-scan
+      Run local secret scan
+
+  reset [--yes] [--purge-data] [--prune-images] [--cleanup-kilo]
+      Remove stack and optional local state
+
+  help
+      Show this message
+EOF
+}
+
+main() {
+  if [[ $# -lt 1 ]]; then
+    print_help
+    exit 1
+  fi
+
+  local cmd="$1"
+  shift
+  case "$cmd" in
+    init)
+      cmd_init "$@"
+      ;;
+    up)
+      cmd_up "$@"
+      ;;
+    down)
+      cmd_down "$@"
+      ;;
+    auth)
+      cmd_auth "$@"
+      ;;
+    doctor)
+      cmd_doctor "$@"
+      ;;
+    test)
+      cmd_test "$@"
+      ;;
+    update)
+      cmd_update "$@"
+      ;;
+    stats)
+      cmd_stats "$@"
+      ;;
+    config)
+      cmd_config "$@"
+      ;;
+    secret-scan)
+      cmd_secret_scan "$@"
+      ;;
+    reset)
+      cmd_reset "$@"
+      ;;
+    help | -h | --help)
+      print_help
+      ;;
+    *)
+      echo "Unknown command: $cmd"
+      print_help
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

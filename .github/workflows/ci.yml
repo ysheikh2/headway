@@ -182,7 +182,7 @@ jobs:
         run: docker compose -f docker-compose.yml config > /tmp/compose.rendered.yaml
 
       - name: Secret scan
-        run: ./scripts/secret-scan.sh
+        run: ./scripts/cli/secret-scan.sh
 
   autofix:
     name: Auto-fix formatting
