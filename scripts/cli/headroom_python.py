@@ -7,11 +7,19 @@ Subcommands:
 - kilo-setup <kilo_conf_path>
 - kilo-cleanup <kilo_conf_path>
 - kilo-check <kilo_conf_path>
+- claude-setup <vscode_settings_path> <aws_profile> <aws_region>
+- claude-cleanup <vscode_settings_path>
+- claude-check <vscode_settings_path> <aws_profile> <aws_region>
 - compose-image <service_name>  (reads compose JSON on stdin)
 - models-summary                (reads /v1/models JSON on stdin)
 - combined-stats
 - stats-report <raw_stats> <raw_history> <raw_combined>
 - generate-config <tmp_dir> <output_file> [copilot_token_file]
+- build-bedrock-compression-payload <outfile>
+- build-copilot-cache-payload <outfile> <model>
+- build-copilot-compression-payload <outfile> <model>
+- select-bedrock-model          (reads /v1/models JSON on stdin)
+- select-bedrock-anthropic-model (reads /v1/models JSON on stdin)
 """
 
 from __future__ import annotations
@@ -20,6 +28,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -28,11 +37,13 @@ from typing import Any
 COPILOT_STATS_URL = "http://127.0.0.1:4000/stats"
 BEDROCK_STATS_URL = "http://127.0.0.1:4002/stats"
 BEDROCK_METRICS_URL = "http://127.0.0.1:4002/metrics"
+BEDROCK_NATIVE_PATCH_STATS_URL = "http://127.0.0.1:4002/bedrock-native/stats"
 
 
 def _strip_jsonc_comments(text: str) -> str:
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
     text = re.sub(r"(^\s*)//.*$", "", text, flags=re.M)
+    text = re.sub(r",(\s*[}\]])", r"\1", text)
     return text
 
 
@@ -154,6 +165,121 @@ def cmd_kilo_check(kilo_conf: str) -> int:
     return 0
 
 
+def _upsert_env_var(items: list[dict[str, Any]], name: str, value: str) -> None:
+    items[:] = [i for i in items if not (isinstance(i, dict) and i.get("name") == name)]
+    items.append({"name": name, "value": value})
+
+
+def cmd_claude_setup(vscode_settings: str, aws_profile: str, aws_region: str) -> int:
+    path = Path(vscode_settings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    data: dict[str, Any]
+    try:
+        data = _load_jsonc(path)
+    except Exception as exc:
+        print(f"failed to parse VS Code settings JSONC: {exc}", file=sys.stderr)
+        return 1
+
+    env_vars = data.get("claudeCode.environmentVariables")
+    if not isinstance(env_vars, list):
+        env_vars = []
+        data["claudeCode.environmentVariables"] = env_vars
+
+    normalized: list[dict[str, Any]] = []
+    for entry in env_vars:
+        if isinstance(entry, dict):
+            normalized.append(entry)
+    env_vars = normalized
+    data["claudeCode.environmentVariables"] = env_vars
+
+    _upsert_env_var(env_vars, "CLAUDE_CODE_USE_BEDROCK", "1")
+    _upsert_env_var(env_vars, "AWS_PROFILE", aws_profile)
+    _upsert_env_var(env_vars, "AWS_REGION", aws_region)
+
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    print(path)
+    return 0
+
+
+def cmd_claude_cleanup(vscode_settings: str) -> int:
+    path = Path(vscode_settings)
+    if not path.exists():
+        return 0
+
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        return 0
+
+    try:
+        data = json.loads(_strip_jsonc_comments(text))
+    except Exception:
+        return 0
+    if not isinstance(data, dict):
+        return 0
+
+    env_vars = data.get("claudeCode.environmentVariables")
+    if not isinstance(env_vars, list):
+        return 0
+
+    remove_names = {
+        "CLAUDE_CODE_USE_BEDROCK",
+        "AWS_PROFILE",
+        "AWS_REGION",
+    }
+    kept: list[dict[str, Any]] = []
+    for entry in env_vars:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        if isinstance(name, str) and name in remove_names:
+            continue
+        kept.append(entry)
+
+    data["claudeCode.environmentVariables"] = kept
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return 0
+
+
+def cmd_claude_check(vscode_settings: str, aws_profile: str, aws_region: str) -> int:
+    path = Path(vscode_settings)
+    if not path.exists():
+        return 1
+
+    try:
+        data = _load_jsonc(path)
+    except Exception:
+        return 1
+
+    env_vars = data.get("claudeCode.environmentVariables")
+    if not isinstance(env_vars, list):
+        return 1
+
+    expected = {
+        "CLAUDE_CODE_USE_BEDROCK": "1",
+        "AWS_PROFILE": aws_profile,
+        "AWS_REGION": aws_region,
+    }
+    seen: dict[str, str] = {}
+    for entry in env_vars:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        value = entry.get("value")
+        if (
+            isinstance(name, str)
+            and isinstance(value, str)
+            and name in expected
+            and name not in seen
+        ):
+            seen[name] = value
+
+    for key, val in expected.items():
+        if seen.get(key) != val:
+            return 1
+    return 0
+
+
 def cmd_compose_image(service_name: str) -> int:
     raw = sys.stdin.read().strip()
     if not raw:
@@ -269,6 +395,7 @@ def _parse_metrics(text: str) -> dict[str, int]:
 def cmd_combined_stats() -> int:
     copilot, copilot_err = _fetch_json(COPILOT_STATS_URL)
     bedrock, bedrock_err = _fetch_json(BEDROCK_STATS_URL)
+    bedrock_patch_stats, _ = _fetch_json(BEDROCK_NATIVE_PATCH_STATS_URL)
 
     if copilot is None:
         print(
@@ -315,11 +442,22 @@ def cmd_combined_stats() -> int:
         else:
             bedrock_err = bedrock_err or metrics_err
 
+    _bp = bedrock_patch_stats or {}
+    _bd = bedrock or {}
+    _bp_tokens = _bp.get("tokens", {}) if isinstance(_bp.get("tokens"), dict) else {}
+    _bp_summary = _bp.get("summary", {}) if isinstance(_bp.get("summary"), dict) else {}
+    _bp_compression = (
+        _bp_summary.get("compression", {})
+        if isinstance(_bp_summary.get("compression"), dict)
+        else {}
+    )
     lanes = {
         "copilot": {
             "available": True,
             "endpoint": COPILOT_STATS_URL,
             "api_requests": _int_num(copilot, "summary", "api_requests"),
+            "input_tokens": _int_num(copilot, "tokens", "input"),
+            "output_tokens": _int_num(copilot, "tokens", "output"),
             "tokens_saved": _int_num(copilot, "tokens", "saved"),
             "compression_tokens_saved": _int_num(copilot, "tokens", "proxy_compression_saved"),
             "requests_cached": _int_num(copilot, "requests", "cached"),
@@ -329,13 +467,20 @@ def cmd_combined_stats() -> int:
             "available": bedrock is not None,
             "endpoint": BEDROCK_STATS_URL,
             "error": bedrock_err,
-            "api_requests": _int_num(bedrock or {}, "summary", "api_requests"),
-            "tokens_saved": _int_num(bedrock or {}, "tokens", "saved"),
-            "compression_tokens_saved": _int_num(
-                bedrock or {}, "tokens", "proxy_compression_saved"
-            ),
-            "requests_cached": _int_num(bedrock or {}, "requests", "cached"),
-            "requests_failed": _int_num(bedrock or {}, "requests", "failed"),
+            "api_requests": _int_num(_bp, "summary", "api_requests")
+            or _int_num(_bd, "summary", "api_requests"),
+            "input_tokens": int(_bp_tokens.get("input") or 0),
+            "output_tokens": int(_bp_tokens.get("output") or 0),
+            "tokens_saved": _int_num(_bp, "tokens", "saved") or _int_num(_bd, "tokens", "saved"),
+            "compression_tokens_saved": _int_num(_bp, "tokens", "proxy_compression_saved")
+            or _int_num(_bd, "tokens", "proxy_compression_saved"),
+            "requests_cached": _int_num(_bp, "requests", "cached")
+            or _int_num(_bd, "requests", "cached"),
+            "requests_failed": _int_num(_bp, "requests", "failed")
+            or _int_num(_bd, "requests", "failed"),
+            "compression_pct": float(_bp_compression.get("avg_compression_pct") or 0.0),
+            "compression": _bp_compression,
+            "cache": _bp.get("cache", {}),
         },
     }
 
@@ -357,6 +502,7 @@ def cmd_combined_stats() -> int:
         "raw": {
             "copilot": copilot,
             "bedrock_native": bedrock_metrics_raw if bedrock_metrics_raw is not None else bedrock,
+            "bedrock_native_patch": bedrock_patch_stats,
         },
     }
     print(json.dumps(out))
@@ -414,17 +560,47 @@ def cmd_stats_report(raw_stats: str, raw_history: str, raw_combined: str) -> int
         )
         print(
             "Unified lanes: "
-            f"copilot(saved={copilot_lane.get('tokens_saved', 0)}, cached={copilot_lane.get('requests_cached', 0)}) "
-            f"bedrock(saved={bedrock_lane.get('tokens_saved', 0)}, cached={bedrock_lane.get('requests_cached', 0)})"
+            f"copilot(in={copilot_lane.get('input_tokens', 0)}, out={copilot_lane.get('output_tokens', 0)}, "
+            f"saved={copilot_lane.get('tokens_saved', 0)}, cached={copilot_lane.get('requests_cached', 0)}) "
+            f"bedrock(in={bedrock_lane.get('input_tokens', 0)}, out={bedrock_lane.get('output_tokens', 0)}, "
+            f"saved={bedrock_lane.get('tokens_saved', 0)}, cached={bedrock_lane.get('requests_cached', 0)}, "
+            f"compression={bedrock_lane.get('compression_pct', 0.0):.1f}%)"
         )
+        bedrock_shim = (
+            bedrock_lane.get("shim_stats")
+            if isinstance(bedrock_lane.get("shim_stats"), dict)
+            else {}
+        )
+        if bedrock_shim:
+            print(
+                "Bedrock native shim: "
+                f"api_requests={bedrock_shim.get('api_requests', 0)}, "
+                f"compressed={bedrock_shim.get('compressed_requests', 0)}, "
+                f"tokens_before={bedrock_shim.get('tokens_before', 0)}, "
+                f"tokens_after={bedrock_shim.get('tokens_after', 0)}, "
+                f"tokens_saved={bedrock_shim.get('tokens_saved', 0)}"
+            )
+        bedrock_compression = (
+            bedrock_lane.get("compression", {})
+            if isinstance(bedrock_lane.get("compression"), dict)
+            else {}
+        )
+        if bedrock_compression:
+            print(
+                "Bedrock native compression: "
+                f"requests_compressed={bedrock_compression.get('requests_compressed', 0)}, "
+                f"avg={_fmt_float_pct(bedrock_compression.get('avg_compression_pct'))}, "
+                f"best={_fmt_float_pct(bedrock_compression.get('best_compression_pct'))}, "
+                f"cache_markers_applied={bedrock_compression.get('cache_markers_applied', 0)}"
+            )
         if (
             bedrock_lane.get("available") is True
             and _safe_int(bedrock_lane.get("api_requests")) > 0
             and _safe_int(bedrock_lane.get("tokens_saved")) == 0
         ):
             print(
-                "Bedrock lane note: request counts are visible, but token/cost savings are "
-                "not exposed by current :4002 metrics yet."
+                "Bedrock lane note: requests are reaching :4002, but no net compression "
+                "savings were recorded for this traffic window."
             )
 
     print(f"API requests: {summary.get('api_requests', 0)}")
@@ -554,10 +730,31 @@ def cmd_stats_report(raw_stats: str, raw_history: str, raw_combined: str) -> int
     if isinstance(history, dict) and history.get("display_session"):
         ds = history.get("display_session", {})
         print(f"Session requests: {ds.get('requests', 0)}")
-        print(f"Session tokens saved: {ds.get('tokens_saved', 0)}")
+        session_saved = _safe_int(ds.get("tokens_saved", 0))
+        print(f"Session tokens saved: {session_saved}")
         if isinstance(ds, dict):
             print(f"Session compression USD: {_fmt_usd(ds.get('compression_savings_usd'))}")
-            print(f"Session savings percent: {_fmt_float_pct(ds.get('savings_percent'))}")
+            # Compute savings percent from combined stats if available (copilot-only history
+            # reports 0% when bedrock lane carries the savings).
+            session_pct: float | None = None
+            if isinstance(combined, dict) and combined.get("ok"):
+                lanes = combined.get("lanes", {}) or {}
+                bedrock_lane = lanes.get("bedrock_native", {}) or {}
+                shim = bedrock_lane.get("shim_stats") or {}
+                # snapshot_stats() returns flat fields: tokens_before, tokens_saved
+                bedrock_before = _safe_int(shim.get("tokens_before") or 0)
+                bedrock_saved = _safe_int(shim.get("tokens_saved") or 0)
+                copilot_in = _safe_int(tokens.get("input", 0))
+                copilot_saved = _safe_int(tokens.get("saved", 0))
+                # tokens_before is input BEFORE compression; savings_pct = saved / before
+                total_before = bedrock_before + copilot_in + copilot_saved
+                total_saved_all = bedrock_saved + copilot_saved
+                if total_before > 0 and total_saved_all > 0:
+                    session_pct = round(100.0 * total_saved_all / total_before, 2)
+            if session_pct is None:
+                raw_pct = ds.get("savings_percent")
+                session_pct = float(raw_pct) if isinstance(raw_pct, (int, float)) else 0.0
+            print(f"Session savings percent: {_fmt_float_pct(session_pct)}")
 
     return 0
 
@@ -843,6 +1040,198 @@ model_list:
     return 0
 
 
+# ---- test payload builders ----
+
+
+def cmd_build_bedrock_compression_payload(outfile: str) -> int:
+    """Build a Bedrock Converse-format compression probe payload and write it to outfile."""
+    probe_run_id = int(time.time() * 1000)
+    arr = [
+        {
+            "id": i % 25,
+            "name": f"item{i % 25}",
+            "status": "ok",
+            "count": i,
+            "payload": "x" * 80,
+            "run": probe_run_id,
+        }
+        for i in range(2000)
+    ]
+    msgs = [
+        {"role": "user", "content": [{"type": "text", "text": "Start the analysis."}]},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "toolUse": {
+                        "toolUseId": "toolu_probe_42",
+                        "name": "custom_fetch",
+                        "input": {"q": "all"},
+                    }
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "toolResult": {
+                        "toolUseId": "toolu_probe_42",
+                        "content": [{"json": arr}],
+                    }
+                }
+            ],
+        },
+        {"role": "assistant", "content": [{"type": "text", "text": "Data fetched. Reviewing."}]},
+        {"role": "user", "content": [{"type": "text", "text": "Any errors?"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "No errors found."}]},
+        {"role": "user", "content": [{"type": "text", "text": "Check the totals."}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Totals look correct."}]},
+        {"role": "user", "content": [{"type": "text", "text": "What about the averages?"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Averages are within range."}]},
+        {"role": "user", "content": [{"type": "text", "text": "Anything else to check?"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "All checks passed."}]},
+        {"role": "user", "content": [{"type": "text", "text": "Summarize in one short line."}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Ready."}]},
+    ]
+    payload = {"messages": msgs, "inferenceConfig": {"maxTokens": 32}}
+    with open(outfile, "w", encoding="utf-8") as f:
+        f.write(json.dumps(payload, separators=(",", ":")))
+    return 0
+
+
+def cmd_build_copilot_cache_payload(outfile: str, model: str) -> int:
+    """Build a stable OpenAI-format cache probe payload (same content each run for cache hits)."""
+    arr = [
+        {"id": i % 25, "name": f"item{i % 25}", "status": "ok", "count": i, "payload": "x" * 60}
+        for i in range(500)
+    ]
+    big = json.dumps(arr)
+    msgs = [
+        {"role": "user", "content": "Analyze this dataset and remember it."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_cache",
+                    "type": "function",
+                    "function": {"name": "fetch", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_cache", "content": big},
+        {"role": "assistant", "content": "Loaded."},
+        {"role": "user", "content": "Ready?"},
+        {"role": "assistant", "content": "Yes."},
+    ]
+    payload = {"model": model, "messages": msgs, "max_tokens": 8, "stream": False}
+    with open(outfile, "w", encoding="utf-8") as f:
+        f.write(json.dumps(payload, separators=(",", ":")))
+    return 0
+
+
+def cmd_build_copilot_compression_payload(outfile: str, model: str) -> int:
+    """Build a unique-per-run OpenAI-format compression probe payload."""
+    run_id = int(time.time() * 1000)
+    arr = [
+        {
+            "id": i % 25,
+            "name": f"item{i % 25}",
+            "status": "ok",
+            "count": i,
+            "payload": "x" * 80,
+            "run": run_id,
+        }
+        for i in range(1200)
+    ]
+    big = json.dumps(arr)
+    msgs = [
+        {"role": "user", "content": "Start the analysis."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_probe_42",
+                    "type": "function",
+                    "function": {"name": "custom_fetch", "arguments": '{"q":"all"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_probe_42", "content": big},
+        {"role": "assistant", "content": "Data fetched. Reviewing."},
+        {"role": "user", "content": "Any errors?"},
+        {"role": "assistant", "content": "No errors found."},
+        {"role": "user", "content": "Check the totals."},
+        {"role": "assistant", "content": "Totals look correct."},
+        {"role": "user", "content": "What about the averages?"},
+        {"role": "assistant", "content": "Averages are within range."},
+        {"role": "user", "content": "Anything else to check?"},
+        {"role": "assistant", "content": "All checks passed."},
+        {"role": "user", "content": "Summarize in one short line."},
+        {"role": "assistant", "content": "Ready."},
+    ]
+    payload = {"model": model, "messages": msgs, "max_tokens": 16, "stream": False}
+    with open(outfile, "w", encoding="utf-8") as f:
+        f.write(json.dumps(payload, separators=(",", ":")))
+    return 0
+
+
+def cmd_select_bedrock_model() -> int:
+    """Read /v1/models JSON on stdin; print preferred bedrock model aliases, one per line."""
+    raw = sys.stdin.read().strip()
+    try:
+        data = json.loads(raw).get("data", [])
+    except Exception:
+        return 0
+    ids = [m.get("id", "") for m in data if isinstance(m, dict)]
+    preferred = [
+        "bedrock-mistral-voxtral-mini-3b-2507",
+        "bedrock-google-gemma-3-4b-it",
+        "bedrock-mistral-ministral-3-3b-instruct",
+        "bedrock-eu-amazon-nova-micro-v1-0",
+        "bedrock-eu-amazon-nova-2-lite-v1-0",
+        "bedrock-global-amazon-nova-2-lite-v1-0",
+        "bedrock-eu-amazon-nova-lite-v1-0",
+        "bedrock-openai-gpt-oss-20b-1-0",
+        "bedrock-eu-anthropic-claude-haiku-4-5-20251001-v1-0",
+        "bedrock-global-anthropic-claude-haiku-4-5-20251001-v1-0",
+    ]
+    selected = [p for p in preferred if p in ids]
+    if selected:
+        print("\n".join(selected))
+        return 0
+    fallback = [x for x in ids if x.startswith("bedrock-")]
+    print("\n".join(fallback))
+    return 0
+
+
+def cmd_select_bedrock_anthropic_model() -> int:
+    """Read /v1/models JSON on stdin; print the preferred Anthropic-on-Bedrock model alias."""
+    raw = sys.stdin.read().strip()
+    try:
+        data = json.loads(raw).get("data", [])
+    except Exception:
+        return 0
+    ids = [m.get("id", "") for m in data if isinstance(m, dict)]
+    preferred = [
+        "bedrock-eu-anthropic-claude-haiku-4-5-20251001-v1-0",
+        "bedrock-global-anthropic-claude-haiku-4-5-20251001-v1-0",
+        "bedrock-eu-anthropic-claude-sonnet-4-5-20250929-v1-0",
+        "bedrock-global-anthropic-claude-sonnet-4-5-20250929-v1-0",
+    ]
+    for p in preferred:
+        if p in ids:
+            print(p)
+            return 0
+    for x in ids:
+        if x.startswith("bedrock-") and "anthropic" in x:
+            print(x)
+            return 0
+    return 0
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print("usage: headroom_python.py <subcommand> [args...]", file=sys.stderr)
@@ -862,6 +1251,12 @@ def main() -> int:
         return cmd_kilo_cleanup(args[0])
     if sub == "kilo-check" and len(args) == 1:
         return cmd_kilo_check(args[0])
+    if sub == "claude-setup" and len(args) == 3:
+        return cmd_claude_setup(args[0], args[1], args[2])
+    if sub == "claude-cleanup" and len(args) == 1:
+        return cmd_claude_cleanup(args[0])
+    if sub == "claude-check" and len(args) == 3:
+        return cmd_claude_check(args[0], args[1], args[2])
 
     if sub == "compose-image" and len(args) == 1:
         return cmd_compose_image(args[0])
@@ -876,6 +1271,17 @@ def main() -> int:
     if sub == "generate-config" and len(args) in (2, 3):
         token_file = args[2] if len(args) == 3 else ""
         return cmd_generate_config(args[0], args[1], token_file)
+
+    if sub == "build-bedrock-compression-payload" and len(args) == 1:
+        return cmd_build_bedrock_compression_payload(args[0])
+    if sub == "build-copilot-cache-payload" and len(args) == 2:
+        return cmd_build_copilot_cache_payload(args[0], args[1])
+    if sub == "build-copilot-compression-payload" and len(args) == 2:
+        return cmd_build_copilot_compression_payload(args[0], args[1])
+    if sub == "select-bedrock-model" and len(args) == 0:
+        return cmd_select_bedrock_model()
+    if sub == "select-bedrock-anthropic-model" and len(args) == 0:
+        return cmd_select_bedrock_anthropic_model()
 
     print(f"invalid arguments for subcommand: {sub}", file=sys.stderr)
     return 1

@@ -44,7 +44,6 @@ jobs:
               - '**/*.yaml'
             relevant:
               - '**'
-              - '!**/*.md'
               - '!LICENSE'
 
   shell-checks:
@@ -119,7 +118,9 @@ jobs:
       - name: Python type checking (all tracked .py)
         run: |
           set -euo pipefail
-          mapfile -t files < <(git ls-files '*.py')
+          # Exclude runtime-only Docker patches: they import headroom/fastapi/httpx
+          # which only exist inside the container and cannot be resolved in CI.
+          mapfile -t files < <(git ls-files '*.py' | grep -Ev 'scripts/runtime/headroom/headroom_patch/|scripts/runtime/headroom/headroom-entrypoint\.py')
           if [ "${#files[@]}" -gt 0 ]; then
             uvx ty check --error-on-warning "${files[@]}"
           fi

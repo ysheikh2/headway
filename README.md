@@ -35,14 +35,15 @@ Request flow:
 
 ```text
 Client/Extension (Copilot/OpenAI-compatible) -> Headroom :4000 -> LiteLLM :4001 -> Provider
-Client/Extension (Bedrock native)            -> Headroom :4002 (native Bedrock routes) -> AWS Bedrock
+Client/Extension (Bedrock native)            -> Headroom :4002 (Python patch: compress+cache) -> headroom-bedrock (Rust SigV4) -> AWS Bedrock
 ```
 
 ## Client and Extension Compatibility
 
 Headway is not Kilo-only.
 
-- Kilo: first-class preset via `./headway config kilo`
+- Kilo: first-class preset via `./headway config setup kilo`
+- Claude Code (VS Code): Bedrock env preset via `./headway config setup claude`
 - Claude Code: works when pointed at the same local provider endpoints
 - Other IDE/CLI extensions and tools: any client that supports OpenAI-compatible base URLs and/or Bedrock base URLs can use Headway
 
@@ -58,27 +59,36 @@ Use the repo-root CLI for all operations:
 
 Primary commands:
 
-- `init` - first-time setup (`.env`, AWS preflight, Kilo preset, model config generation)
+- `init` - first-time setup (`.env`, AWS preflight, Kilo + Claude Code presets, model config generation)
 - `up` - start/reconcile stack and wait for health
 - `down` - stop stack
 - `auth` - refresh AWS sessions and restart services (no model-config regeneration)
-- `doctor` - diagnostics (containers, health, models, Kilo preset check, AWS session status)
+- `doctor` - diagnostics (containers, health, models, client preset checks, AWS session status)
 - `test` - full end-to-end smoke tests (`scripts/cli/test.sh`)
 - `update` - pull/restart images
 - `stats` - savings/cost/cache report
 - `config regen` - regenerate `litellm_config.yaml` explicitly
-- `config kilo` - write Kilo provider base URL preset
+- `config setup [kilo|claude|all]` - write client presets (Kilo and/or Claude Code)
 - `reset` - remove stack and optional local state
 - `secret-scan` - run local secret scan
 
+## Supported Systems
+
+- macOS: supported with Docker Desktop.
+- Linux: supported with Docker Engine + Docker Compose plugin.
+- Windows (WSL2): supported when a container runtime is available inside WSL2 (Docker Desktop integration, or Docker Engine running in WSL2).
+- Restricted environments: if you cannot run any Docker-compatible daemon, Headway cannot start.
+
+Headway requires `docker compose` and a working Docker-compatible daemon. Docker Desktop is common, but not strictly required when equivalent runtime support exists.
+
 ## Quick Start
 
-1. Ensure Docker Desktop is running.
+1. Ensure your Docker-compatible runtime is running (`docker info` should succeed).
 2. Ensure AWS profiles are usable:
 
 ```bash
 aws sts get-caller-identity --profile "$AWS_PROFILE"
-aws sts get-caller-identity --profile "$BEDROCK_AWS_PROFILE"
+aws sts get-caller-identity --profile "${BEDROCK_AWS_PROFILE:-$AWS_PROFILE}"
 ```
 
 3. Initialize once:
@@ -92,13 +102,19 @@ aws sts get-caller-identity --profile "$BEDROCK_AWS_PROFILE"
 - It creates `.env` if missing.
 - If required values are missing and you're in an interactive terminal, it prompts for them with sensible defaults.
 - It verifies AWS sessions and triggers SSO login when needed.
-- It writes the Kilo preset and generates `litellm_config.yaml`.
+- It writes Kilo + Claude Code presets and generates `litellm_config.yaml`.
 
 Optional first-run shortcut if you already know your AWS profile:
 
 ```bash
 ./headway init --aws-profile <your-profile>
 ```
+
+Environment profile behavior:
+
+- `AWS_PROFILE` (required): primary profile for LiteLLM lane and baseline fallback.
+- `BEDROCK_AWS_PROFILE` (optional): native Bedrock runtime profile; defaults to `AWS_PROFILE` when unset.
+- `BEDROCK_DISCOVERY_AWS_PROFILE` (optional): profile used by `./headway config regen`; defaults to `BEDROCK_AWS_PROFILE`, then `AWS_PROFILE`.
 
 4. Start stack:
 
@@ -114,21 +130,70 @@ Optional first-run shortcut if you already know your AWS profile:
 ./headway stats
 ```
 
+Optional compression tuning (Copilot/OpenAI lane; enabled by Headway defaults):
+
+- `HEADROOM_COMPRESS_USER_MESSAGES=1`
+- `HEADROOM_MIN_TOKENS=120`
+- `HEADROOM_PROTECT_RECENT=2`
+
+These defaults improve practical savings for coding-agent workloads (large user turns and older tool outputs) while keeping the last recent context protected. Override any of them in `.env` if you want a more conservative or more aggressive tradeoff.
+
+Two distinct savings show up on the Copilot/OpenAI lane:
+
+- **Compression** — token removal from stale/compressible context (the `tokens_saved` / "Tokens Removed" figures). Stable coding-agent prefixes are intentionally left frozen to preserve provider prompt-cache hits, so compression savings are low when context is mostly stable.
+- **Prefix caching** — GitHub Copilot automatically caches Claude prompts and reports `cached_tokens`; those reads bill at ~10% of input. Headway prices that discount from the models.dev snapshot and surfaces it as `cache_savings_usd` in `./headway stats` and the dashboard's prefix-cache panel. This is usually the larger win for stable agent sessions.
+
+Bedrock native lane savings (enabled by default):
+
+- `:4002` traffic passes through Headway's Python runtime patch before Rust SigV4 forwarding.
+- For Anthropic Bedrock models, Headway applies:
+  - request compression (same headroom `compress()` pipeline)
+  - local compression cache reuse across turns
+  - optional auto-placement of `cache_control` markers (`HEADWAY_BEDROCK_AUTO_CACHE_CONTROL=1`)
+- Bedrock-native savings metrics (input/output tokens, compression %, and USD) are exposed at `/bedrock-native/stats` and rolled into unified `./headway stats` output and the dashboard.
+
+USD savings are estimated from a local pricing snapshot of [models.dev](https://models.dev/api.json), refreshed by `./headway up` and `./headway update` into `.data/headroom/models-dev.json` (gitignored). If the snapshot is missing (e.g. first run while offline), token savings still display but USD figures are omitted rather than guessed.
+
 ## Configuration Examples
 
-Kilo preset helper:
+Set up both client presets in one command:
 
 ```bash
-./headway config kilo
+./headway config setup all
 ```
 
-That writes:
+Set up only Kilo:
+
+```bash
+./headway config setup kilo
+```
+
+Set up only Claude Code (VS Code settings):
+
+```bash
+./headway config setup claude
+```
+
+Kilo preset writes:
 
 - `github-copilot.options.baseURL = "http://127.0.0.1:4000/v1"`
 - `openai-compatible.options.baseURL = "http://127.0.0.1:4000/v1"`
 - `amazon-bedrock.options.baseURL = "http://127.0.0.1:4002"`
 
-For other tools/extensions (including Claude Code), use equivalent provider settings:
+Claude Code preset writes `claudeCode.environmentVariables` entries in VS Code settings:
+
+- `CLAUDE_CODE_USE_BEDROCK=1`
+- `AWS_PROFILE=<BEDROCK_AWS_PROFILE>`
+- `AWS_REGION=<AWS_REGION>`
+
+Model selection is intentionally left to the user in Claude Code settings.
+
+By default, Headway writes Claude Code settings to:
+
+- macOS: `~/Library/Application Support/Code/User/settings.json`
+- Override path: set `CLAUDE_CODE_SETTINGS` before running `./headway config setup claude`
+
+For other tools/extensions, use equivalent provider settings:
 
 - OpenAI-compatible base URL -> `http://127.0.0.1:4000/v1`
 - Bedrock base URL -> `http://127.0.0.1:4002`
@@ -139,6 +204,7 @@ For other tools/extensions (including Claude Code), use equivalent provider sett
 - Health snapshot: `./headway doctor`
 - Full smoke tests: `./headway test`
 - Savings/usage view: `./headway stats`
+- Web dashboard: `http://127.0.0.1:4000/dashboard`
 - Stop: `./headway down`
 
 ## Failure Recovery

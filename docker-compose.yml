@@ -46,10 +46,17 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:4000:8787"
+      - "127.0.0.1:4002:8787"
     environment:
       - HEADROOM_TELEMETRY=off
       - HEADROOM_BEDROCK_STATS_URL=http://headroom-bedrock:8787/stats
       - HEADROOM_BEDROCK_METRICS_URL=http://headroom-bedrock:8787/metrics
+      - HEADROOM_COMPRESS_USER_MESSAGES
+      - HEADROOM_MIN_TOKENS
+      - HEADROOM_PROTECT_RECENT
+      - HEADWAY_BEDROCK_AUTO_CACHE_CONTROL=${HEADWAY_BEDROCK_AUTO_CACHE_CONTROL:-1}
+      - HEADROOM_BEDROCK_PROXY_URL=http://headroom-bedrock:8787
+      - HEADWAY_BEDROCK_DEBUG_COMPRESS=${HEADWAY_BEDROCK_DEBUG_COMPRESS:-0}
     entrypoint: ["python", "-m", "headroom.cli", "proxy"]
     command:
       - "--host"
@@ -71,7 +78,7 @@ services:
       retries: 3
       start_period: 30s
     volumes:
-      - ./.data/headroom:/root/.headroom
+      - ./.data/headroom:/home/nonroot/.headroom
       - ./scripts/runtime/headroom/headroom_patch:/usr/local/lib/python3.13/site-packages/headroom_patch:ro
       - ./scripts/runtime/headroom/usercustomize.py:/usr/local/lib/python3.13/site-packages/usercustomize.py:ro
       - ./scripts/runtime/headroom/dashboard.html:/usr/local/lib/python3.13/site-packages/headroom/dashboard/templates/dashboard.html:ro
@@ -80,8 +87,8 @@ services:
     image: ${HEADROOM_BEDROCK_IMAGE:-ghcr.io/ysheikh2/headway:bedrock-native}
     container_name: headroom-bedrock-gateway
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:4002:8787"
+    expose:
+      - "8787"
     environment:
       - AWS_PROFILE=${BEDROCK_AWS_PROFILE:-default}
       - AWS_REGION=${AWS_REGION:-eu-central-1}
