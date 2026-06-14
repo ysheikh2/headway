@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import threading
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -806,6 +807,48 @@ def _parse_output_tokens_from_response(body_bytes: bytes, action: str) -> int:
     return 0
 
 
+class _StreamUsageScanner:
+    """Extract the final output-token count from a streaming response body.
+
+    Streaming responses carry usage metadata near the end of the stream, in one
+    of two shapes depending on the surface:
+
+    - Anthropic Messages SSE (``/v1/messages`` stream): ``message_delta`` events
+      carry a cumulative ``"output_tokens"`` that grows to the final total.
+    - Bedrock Converse event-stream (``converse-stream``): a single ``metadata``
+      frame carries ``"outputTokens"`` with the total.
+
+    Rather than fully decode the AWS event-stream binary framing, we scan the
+    raw bytes for the JSON field and take the max value seen (final cumulative
+    count for Anthropic, the single value for Converse). Only a bounded tail of
+    the stream is retained, since the usage metadata is always at the end.
+    """
+
+    _MAX_TAIL = 65536
+    _PATTERN = re.compile(rb'"(?:output_tokens|outputTokens)"\s*:\s*(\d+)')
+
+    def __init__(self) -> None:
+        self._buf = bytearray()
+
+    def feed(self, chunk: bytes) -> None:
+        if not chunk:
+            return
+        self._buf.extend(chunk)
+        if len(self._buf) > self._MAX_TAIL:
+            del self._buf[: -self._MAX_TAIL]
+
+    def output_tokens(self) -> int:
+        best = 0
+        for match in self._PATTERN.finditer(bytes(self._buf)):
+            try:
+                value = int(match.group(1))
+            except Exception:
+                continue
+            if value > best:
+                best = value
+        return best
+
+
 def snapshot_stats() -> dict[str, Any]:
     with _stats_lock:
         snapshot = copy.deepcopy(_stats)
@@ -868,7 +911,14 @@ async def _forward_request(
     upstream_base: str,
     body: bytes,
     stream: bool,
+    on_stream_complete=None,
 ):
+    """Forward to the Bedrock gateway.
+
+    For streaming responses, ``on_stream_complete(output_tokens, status_code)``
+    is invoked after the stream is fully consumed so the caller can record
+    output-token stats (which are only known once the stream ends).
+    """
     query = request.url.query
     url = f"{upstream_base.rstrip('/')}{request.url.path}"
     if query:
@@ -887,22 +937,30 @@ async def _forward_request(
 
     if stream:
         upstream = await client.send(req, stream=True)
+        status_code = upstream.status_code
         passthrough_headers = {
             k: v
             for (k, v) in upstream.headers.items()
             if k.lower() not in {"connection", "transfer-encoding", "content-length"}
         }
+        scanner = _StreamUsageScanner()
 
         async def _iter_bytes():
             try:
                 async for chunk in upstream.aiter_raw():
+                    scanner.feed(chunk)
                     yield chunk
             finally:
                 await upstream.aclose()
+                if on_stream_complete is not None:
+                    try:
+                        on_stream_complete(scanner.output_tokens(), status_code)
+                    except Exception:
+                        pass
 
         return StreamingResponse(
             _iter_bytes(),
-            status_code=upstream.status_code,
+            status_code=status_code,
             headers=passthrough_headers,
             media_type=upstream.headers.get("content-type"),
         )
@@ -964,16 +1022,33 @@ async def _handle_v1_messages(request):
             failed = True
 
     try:
+        # For streaming, output tokens are only known once the stream is fully
+        # consumed; defer the stats record into the stream-complete callback.
+        def _on_stream_complete(out_tokens: int, status_code: int) -> None:
+            _record_stats(
+                model_id=model_id,
+                action="v1/messages",
+                before=before,
+                after=after,
+                output_tokens=out_tokens,
+                compressed=compressed,
+                marker_applied=marker_applied,
+                failed=failed or status_code >= 400,
+            )
+
         response = await _forward_request(
             request,
             upstream_base=BEDROCK_UPSTREAM,
             body=body_bytes,
             stream=stream,
+            on_stream_complete=_on_stream_complete if stream else None,
         )
+        if stream:
+            return response
         if response.status_code >= 400:
             failed = True
         out_tokens = 0
-        if not stream and not failed and hasattr(response, "body"):
+        if not failed and hasattr(response, "body"):
             try:
                 out_tokens = _parse_output_tokens_from_response(response.body, "v1/messages")
             except Exception:
@@ -1147,16 +1222,33 @@ def apply_patch() -> None:
 
             is_stream = _is_streaming_action(action)
             try:
+                # For streaming, output tokens are only known once the stream is
+                # fully consumed; defer the stats record into the callback.
+                def _on_stream_complete(out_tokens: int, status_code: int) -> None:
+                    _record_stats(
+                        model_id=model_id,
+                        action=action,
+                        before=before,
+                        after=after,
+                        output_tokens=out_tokens,
+                        compressed=compressed,
+                        marker_applied=marker_applied,
+                        failed=failed or status_code >= 400,
+                    )
+
                 response = await _forward_request(
                     request,
                     upstream_base=BEDROCK_UPSTREAM,
                     body=body_bytes,
                     stream=is_stream,
+                    on_stream_complete=_on_stream_complete if is_stream else None,
                 )
+                if is_stream:
+                    return response
                 if response.status_code >= 400:
                     failed = True
                 out_tokens = 0
-                if not is_stream and not failed and hasattr(response, "body"):
+                if not failed and hasattr(response, "body"):
                     try:
                         out_tokens = _parse_output_tokens_from_response(response.body, action)
                     except Exception:
