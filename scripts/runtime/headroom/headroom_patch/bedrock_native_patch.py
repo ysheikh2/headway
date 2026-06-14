@@ -796,16 +796,24 @@ def _record_stats(
             model_row["tokens_after"] += after if after > 0 else before
             model_row["tokens_saved"] += saved
             model_row["output_tokens"] = model_row.get("output_tokens", 0) + output_tokens
-            model_row["cache_read_tokens"] = model_row.get("cache_read_tokens", 0) + cache_read_tokens
-            model_row["cache_write_tokens"] = model_row.get("cache_write_tokens", 0) + cache_write_tokens
+            model_row["cache_read_tokens"] = (
+                model_row.get("cache_read_tokens", 0) + cache_read_tokens
+            )
+            model_row["cache_write_tokens"] = (
+                model_row.get("cache_write_tokens", 0) + cache_write_tokens
+            )
             if failed:
                 model_row["failed"] += 1
         else:
             model_row = _stats.by_model.setdefault(model_id, dict(_default_row))
             model_row["requests"] += 1
             model_row["output_tokens"] = model_row.get("output_tokens", 0) + output_tokens
-            model_row["cache_read_tokens"] = model_row.get("cache_read_tokens", 0) + cache_read_tokens
-            model_row["cache_write_tokens"] = model_row.get("cache_write_tokens", 0) + cache_write_tokens
+            model_row["cache_read_tokens"] = (
+                model_row.get("cache_read_tokens", 0) + cache_read_tokens
+            )
+            model_row["cache_write_tokens"] = (
+                model_row.get("cache_write_tokens", 0) + cache_write_tokens
+            )
             if failed:
                 model_row["failed"] += 1
 
