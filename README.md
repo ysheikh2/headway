@@ -73,7 +73,18 @@ Primary commands:
 
 ## Quick Start
 
-1. Ensure Docker Desktop is running.
+## Supported Systems
+
+- macOS: supported with Docker Desktop.
+- Linux: supported with Docker Engine + Docker Compose plugin.
+- Windows (WSL2): supported when a container runtime is available inside WSL2 (Docker Desktop integration, or Docker Engine running in WSL2).
+- Restricted environments: if you cannot run any Docker-compatible daemon, Headway cannot start.
+
+Headway requires `docker compose` and a working Docker-compatible daemon. Docker Desktop is common, but not strictly required when equivalent runtime support exists.
+
+## Quick Start
+
+1. Ensure your Docker-compatible runtime is running (`docker info` should succeed).
 2. Ensure AWS profiles are usable:
 
 ```bash
