@@ -410,9 +410,7 @@ def cmd_stats_report(raw_stats: str, raw_history: str, raw_combined: str) -> int
         lanes = combined.get("lanes", {}) if isinstance(combined.get("lanes"), dict) else {}
         copilot_lane = lanes.get("copilot", {}) if isinstance(lanes.get("copilot"), dict) else {}
         bedrock_lane = (
-            lanes.get("bedrock_native", {})
-            if isinstance(lanes.get("bedrock_native"), dict)
-            else {}
+            lanes.get("bedrock_native", {}) if isinstance(lanes.get("bedrock_native"), dict) else {}
         )
         print(
             "Unified lanes: "
@@ -442,7 +440,9 @@ def cmd_stats_report(raw_stats: str, raw_history: str, raw_combined: str) -> int
         f"(proxy-only: {_fmt_float_pct(tokens.get('proxy_savings_percent'))})"
     )
 
-    compression = summary.get("compression", {}) if isinstance(summary.get("compression"), dict) else {}
+    compression = (
+        summary.get("compression", {}) if isinstance(summary.get("compression"), dict) else {}
+    )
     print(
         "Compression details: "
         f"requests_compressed={compression.get('requests_compressed', 0)}, "
@@ -464,7 +464,9 @@ def cmd_stats_report(raw_stats: str, raw_history: str, raw_combined: str) -> int
         )
 
     cost_block = stats.get("cost", {}) if isinstance(stats.get("cost"), dict) else {}
-    per_model = cost_block.get("per_model", {}) if isinstance(cost_block.get("per_model"), dict) else {}
+    per_model = (
+        cost_block.get("per_model", {}) if isinstance(cost_block.get("per_model"), dict) else {}
+    )
     if per_model:
         print("Top models by token savings:")
         rows: list[tuple[str, int, float, int, float]] = []
@@ -554,13 +556,8 @@ def cmd_stats_report(raw_stats: str, raw_history: str, raw_combined: str) -> int
         print(f"Session requests: {ds.get('requests', 0)}")
         print(f"Session tokens saved: {ds.get('tokens_saved', 0)}")
         if isinstance(ds, dict):
-            print(
-                f"Session compression USD: {_fmt_usd(ds.get('compression_savings_usd'))}"
-            )
-            print(
-                "Session savings percent: "
-                f"{_fmt_float_pct(ds.get('savings_percent'))}"
-            )
+            print(f"Session compression USD: {_fmt_usd(ds.get('compression_savings_usd'))}")
+            print(f"Session savings percent: {_fmt_float_pct(ds.get('savings_percent'))}")
 
     return 0
 
