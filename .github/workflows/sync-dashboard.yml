@@ -14,7 +14,7 @@ env:
         default: "main"
 
 concurrency:
-  group: sync-dashboard-${{ github.ref }}
+  group: sync-dashboard
   cancel-in-progress: true
 
 permissions:
