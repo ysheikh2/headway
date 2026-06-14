@@ -22,7 +22,7 @@ while [[ $# -gt 0 ]]; do
       OUTPUT_FILE="$2"
       shift 2
       ;;
-    --bedrock-discovery-aws-profile|--bedrock-discovery-profile)
+    --bedrock-discovery-aws-profile | --bedrock-discovery-profile)
       BEDROCK_DISCOVERY_AWS_PROFILE="$2"
       shift 2
       ;;

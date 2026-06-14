@@ -262,7 +262,12 @@ def cmd_claude_check(vscode_settings: str, aws_profile: str, aws_region: str) ->
             continue
         name = entry.get("name")
         value = entry.get("value")
-        if isinstance(name, str) and isinstance(value, str) and name in expected and name not in seen:
+        if (
+            isinstance(name, str)
+            and isinstance(value, str)
+            and name in expected
+            and name not in seen
+        ):
             seen[name] = value
 
     for key, val in expected.items():
