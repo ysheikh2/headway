@@ -549,7 +549,38 @@ def _anthropic_messages_to_bedrock(
     return converted
 
 
+def _add_system_cache_control(body: dict[str, Any]) -> bool:
+    """Add cache_control to the last block of the system prompt if present and unmarked.
+
+    The system prompt is the most valuable caching target — it's stable across turns
+    and often large. Marking it yields cache reads (90% off) on every subsequent turn.
+    Returns True if a marker was added.
+    """
+    system = body.get("system")
+    if not system:
+        return False
+    # Anthropic Messages API: system is a string or list of content blocks.
+    if isinstance(system, str):
+        if system and "cache_control" not in body:
+            body["system"] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+            return True
+        return False
+    if isinstance(system, list) and system:
+        if _deep_has_key(system, "cache_control"):
+            return False
+        last = system[-1]
+        if isinstance(last, dict) and not last.get("cache_control"):
+            last["cache_control"] = {"type": "ephemeral"}
+            return True
+    return False
+
+
 def _add_cache_control_marker(messages: list[dict[str, Any]]) -> bool:
+    """Add cache_control to a stable message in the frozen prefix (best-effort).
+
+    Called after system-prompt marking; this adds a second breakpoint on the most
+    recently frozen tool result or user turn for multi-breakpoint cache coverage.
+    """
     if not messages or _deep_has_key(messages, "cache_control"):
         return False
 
@@ -615,14 +646,27 @@ def _compress_bedrock_body(
     outgoing_messages = copy.deepcopy(compressed_messages)
     marker_applied = False
     if AUTO_CACHE_CONTROL and _is_anthropic_model(model_id):
-        marker_applied = _add_cache_control_marker(outgoing_messages)
+        # Mark the system prompt first (stable, highest caching value), then
+        # add a second breakpoint in the frozen message prefix if one exists.
+        updated_body = dict(body)
+        sys_marked = _add_system_cache_control(updated_body)
+        msg_marked = _add_cache_control_marker(outgoing_messages)
+        marker_applied = sys_marked or msg_marked
 
-    updated = dict(body)
+    updated = updated_body if marker_applied else dict(body)
     updated["messages"] = _anthropic_messages_to_bedrock(
         outgoing_messages,
         # Converse-stream is stricter about Bedrock-native content-block keys.
         prefer_bedrock_blocks=(action == "converse-stream"),
     )
+
+    # Normalize system blocks: Bedrock Converse uses {"text": "..."} but
+    # headroom-bedrock forwards to InvokeModel which requires {"type": "text", "text": "..."}.
+    system = updated.get("system")
+    if isinstance(system, list):
+        for block in system:
+            if isinstance(block, dict) and "text" in block and "type" not in block:
+                block["type"] = "text"
 
     # Bedrock Anthropic expects Anthropic wire fields at top-level even on
     # /converse surfaces in this lane. Normalize common Converse-style fields.
@@ -686,11 +730,15 @@ def _compress_anthropic_v1_body(
     outgoing = copy.deepcopy(compressed_messages)
     marker_applied = False
     if AUTO_CACHE_CONTROL and _is_anthropic_model(model_id):
-        marker_applied = _add_cache_control_marker(outgoing)
+        updated_body = dict(body)
+        sys_marked = _add_system_cache_control(updated_body)
+        msg_marked = _add_cache_control_marker(outgoing)
+        marker_applied = sys_marked or msg_marked
+    else:
+        updated_body = dict(body)
 
-    updated = dict(body)
-    updated["messages"] = outgoing
-    return updated, int(tokens_before), int(tokens_after), marker_applied
+    updated_body["messages"] = outgoing
+    return updated_body, int(tokens_before), int(tokens_after), marker_applied
 
 
 def _record_stats(
@@ -809,8 +857,8 @@ def _parse_cache_tokens_from_response(body_bytes: bytes) -> tuple[int, int]:
     """Extract (cache_read_tokens, cache_write_tokens) from a Bedrock/Anthropic response.
 
     Handles both formats:
-    - Anthropic Messages API: cache_read_input_tokens / cache_creation_input_tokens
-    - Bedrock Converse API:   cacheReadInputTokenCount / cacheWriteInputTokenCount
+    - Anthropic Messages API (InvokeModel): cache_read_input_tokens / cache_creation_input_tokens
+    - Bedrock Converse API: cacheReadInputTokens / cacheWriteInputTokens
     """
     if not body_bytes:
         return 0, 0
@@ -825,14 +873,14 @@ def _parse_cache_tokens_from_response(body_bytes: bytes) -> tuple[int, int]:
     if not isinstance(usage, dict):
         return 0, 0
 
-    # Anthropic Messages API format (v1/messages on Bedrock lane)
+    # Anthropic Messages API format (InvokeModel path through headroom-bedrock)
     cr = int(usage.get("cache_read_input_tokens") or 0)
     cw = int(usage.get("cache_creation_input_tokens") or 0)
-    # Bedrock Converse API format
+    # Bedrock Converse API format (cacheReadInputTokens / cacheWriteInputTokens)
     if cr == 0:
-        cr = int(usage.get("cacheReadInputTokenCount") or 0)
+        cr = int(usage.get("cacheReadInputTokens") or 0)
     if cw == 0:
-        cw = int(usage.get("cacheWriteInputTokenCount") or 0)
+        cw = int(usage.get("cacheWriteInputTokens") or 0)
 
     return cr, cw
 
@@ -847,10 +895,10 @@ class _StreamUsageScanner:
     _MAX_TAIL = 65536
     _OUT_PATTERN = re.compile(rb'"(?:output_tokens|outputTokens)"\s*:\s*(\d+)')
     _CR_PATTERN = re.compile(
-        rb'"(?:cache_read_input_tokens|cacheReadInputTokenCount)"\s*:\s*(\d+)'
+        rb'"(?:cache_read_input_tokens|cacheReadInputTokens)"\s*:\s*(\d+)'
     )
     _CW_PATTERN = re.compile(
-        rb'"(?:cache_creation_input_tokens|cacheWriteInputTokenCount)"\s*:\s*(\d+)'
+        rb'"(?:cache_creation_input_tokens|cacheWriteInputTokens)"\s*:\s*(\d+)'
     )
 
     def __init__(self) -> None:
