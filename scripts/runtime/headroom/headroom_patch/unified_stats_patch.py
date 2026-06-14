@@ -15,16 +15,17 @@ from urllib.request import urlopen
 _MODELS_DEV_CACHE_PATH = os.getenv(
     "HEADWAY_MODELS_DEV_CACHE", "/home/nonroot/.headroom/models-dev.json"
 )
-_models_dev_pricing_cache: dict[str, tuple[float, float]] | None = None
+# {normalized_model_id: {"input","output","cache_read","cache_write"}} in $/token.
+_models_dev_pricing_cache: dict[str, dict[str, float]] | None = None
 
 
-def _load_models_dev_pricing() -> dict[str, tuple[float, float]]:
-    """Load {normalized_model_id: (in_price_per_tok, out_price_per_tok)} from local cache."""
+def _load_models_dev_pricing() -> dict[str, dict[str, float]]:
+    """Load per-token pricing records from the local models.dev cache."""
     global _models_dev_pricing_cache
     if _models_dev_pricing_cache is not None:
         return _models_dev_pricing_cache
 
-    result: dict[str, tuple[float, float]] = {}
+    result: dict[str, dict[str, float]] = {}
     try:
         with open(_MODELS_DEV_CACHE_PATH) as fh:
             data = json.load(fh)
@@ -52,36 +53,50 @@ def _load_models_dev_pricing() -> dict[str, tuple[float, float]]:
             out_c = cost.get("output")
             if not (isinstance(in_c, (int, float)) and isinstance(out_c, (int, float))):
                 continue
+            # cache_read / cache_write are optional; default to input when absent.
+            cr = cost.get("cache_read")
+            cw = cost.get("cache_write")
             # Normalize: lowercase, drop version qualifier after ":"
             norm = model_id.lower().split(":")[0]
-            result[norm] = (float(in_c) / 1_000_000, float(out_c) / 1_000_000)
+            result[norm] = {
+                "input": float(in_c) / 1_000_000,
+                "output": float(out_c) / 1_000_000,
+                "cache_read": (float(cr) / 1_000_000) if isinstance(cr, (int, float)) else float(in_c) / 1_000_000,
+                "cache_write": (float(cw) / 1_000_000) if isinstance(cw, (int, float)) else float(in_c) / 1_000_000,
+            }
 
     _models_dev_pricing_cache = result
     return result
 
 
-def _lookup_price(display_model: str) -> tuple[float, float] | None:
-    """Return (input_price_per_tok, output_price_per_tok) from the models.dev cache, or None."""
+def _lookup_record(display_model: str) -> dict[str, float] | None:
+    """Return the full per-token pricing record for a model, or None."""
     pricing = _load_models_dev_pricing()
     if not pricing:
         return None
 
     key = display_model.lower().split(":")[0]
-
     if key in pricing:
         return pricing[key]
 
-    # Substring match: the display model id and stored ids may differ by region prefix or
-    # version suffix. Pick the longest matching stored id (most specific).
-    best: tuple[float, float] | None = None
+    # Substring match: the display model id and stored ids may differ by region prefix
+    # or version suffix. Pick the longest matching stored id (most specific).
+    best: dict[str, float] | None = None
     best_len = 0
-    for model_id, price in pricing.items():
+    for model_id, rec in pricing.items():
         if model_id in key or key in model_id:
             if len(model_id) > best_len:
-                best = price
+                best = rec
                 best_len = len(model_id)
-
     return best
+
+
+def _lookup_price(display_model: str) -> tuple[float, float] | None:
+    """Return (input_price_per_tok, output_price_per_tok) from the models.dev cache, or None."""
+    rec = _lookup_record(display_model)
+    if rec is None:
+        return None
+    return rec["input"], rec["output"]
 
 
 @dataclass
@@ -237,6 +252,102 @@ def _build_bedrock_shim_stats() -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
     return payload
+
+
+def _dominant_models_by_provider(payload: dict[str, Any]) -> dict[str, str]:
+    """Most-frequent model per headroom provider, from the request logs.
+
+    prefix_cache stats are aggregated per provider ("openai", "anthropic", ...)
+    but carry no model id, so we attribute each provider's cached tokens to the
+    model it served most often in order to price them.
+    """
+    logs = payload.get("request_logs") if isinstance(payload.get("request_logs"), list) else []
+    counts: dict[str, dict[str, int]] = {}
+    for row in logs:
+        if not isinstance(row, dict):
+            continue
+        provider = str(row.get("provider") or "")
+        model = str(row.get("model") or "")
+        if not provider or not model:
+            continue
+        counts.setdefault(provider, {})
+        counts[provider][model] = counts[provider].get(model, 0) + 1
+    return {
+        provider: max(models.items(), key=lambda kv: kv[1])[0]
+        for provider, models in counts.items()
+        if models
+    }
+
+
+def _apply_prefix_cache_pricing(payload: dict[str, Any]) -> None:
+    """Price provider prefix-cache reads/writes using models.dev rates.
+
+    Headroom records cache_read/cache_write token counts (e.g. GitHub Copilot
+    auto-caches Claude prompts and reports ``cached_tokens``) but cannot value
+    them without per-model pricing. We attribute each provider's cached tokens
+    to its dominant model and compute the dollar discount vs. uncached input.
+    Mutates payload in place; adds to cache savings, never to compression.
+    """
+    prefix_cache = _as_dict(payload.get("prefix_cache"))
+    by_provider = _as_dict(prefix_cache.get("by_provider"))
+    if not by_provider:
+        return
+
+    provider_model = _dominant_models_by_provider(payload)
+    total_read_savings = 0.0
+    total_write_premium = 0.0
+    total_read_tokens = 0
+    total_write_tokens = 0
+
+    for provider, raw in by_provider.items():
+        prov = _as_dict(raw)
+        read_toks = _to_int(prov.get("cache_read_tokens"))
+        write_toks = _to_int(prov.get("cache_write_tokens"))
+        if read_toks <= 0 and write_toks <= 0:
+            continue
+        model = provider_model.get(provider, "")
+        rec = _lookup_record(model) if model else None
+        if rec is None:
+            continue
+        # Reads cost cache_read instead of input → saved = (input - cache_read).
+        read_savings = read_toks * max(0.0, rec["input"] - rec["cache_read"])
+        # Writes cost a premium over input → (cache_write - input), if any.
+        write_premium = write_toks * max(0.0, rec["cache_write"] - rec["input"])
+        prov["savings_usd"] = read_savings
+        prov["write_premium_usd"] = write_premium
+        prov["net_savings_usd"] = read_savings - write_premium
+        by_provider[provider] = prov
+        total_read_savings += read_savings
+        total_write_premium += write_premium
+        total_read_tokens += read_toks
+        total_write_tokens += write_toks
+
+    if total_read_tokens <= 0 and total_write_tokens <= 0:
+        return
+
+    net = total_read_savings - total_write_premium
+    totals = _as_dict(prefix_cache.get("totals"))
+    totals["savings_usd"] = total_read_savings
+    totals["write_premium_usd"] = total_write_premium
+    totals["net_savings_usd"] = net
+    prefix_cache["totals"] = totals
+    prefix_cache["by_provider"] = by_provider
+    payload["prefix_cache"] = prefix_cache
+
+    # Surface in the cost block and summary breakdown the dashboard/CLI read from.
+    cost = _as_dict(payload.get("cost"))
+    cost["cache_savings_usd"] = float(cost.get("cache_savings_usd") or 0.0) + net
+    cost["savings_usd"] = float(cost.get("savings_usd") or 0.0) + net
+    payload["cost"] = cost
+
+    summary = _as_dict(payload.get("summary"))
+    sum_cost = _as_dict(summary.get("cost"))
+    breakdown = _as_dict(sum_cost.get("breakdown"))
+    breakdown["cache_savings_usd"] = float(breakdown.get("cache_savings_usd") or 0.0) + net
+    sum_cost["breakdown"] = breakdown
+    sum_cost["total_saved_usd"] = float(sum_cost.get("total_saved_usd") or 0.0) + net
+    summary["cost"] = sum_cost
+    payload["summary"] = summary
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -520,6 +631,10 @@ def _merge_unified_stats(base: dict[str, Any], bedrock: _BedrockStats) -> dict[s
         payload["request_logs"] = request_logs[-500:]
         recent_requests.sort(key=lambda r: str(_as_dict(r).get("timestamp", "")), reverse=True)
         payload["recent_requests"] = recent_requests[:10]
+
+    # Price provider prefix-cache reads (e.g. Copilot's automatic Claude prompt
+    # caching) that headroom records but cannot value without per-model pricing.
+    _apply_prefix_cache_pricing(payload)
 
     return payload
 

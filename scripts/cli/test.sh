@@ -239,6 +239,68 @@ except Exception:
 '
 }
 
+get_copilot_cache_read_tokens() {
+  local base_url="$1"
+  curl -s --max-time 8 "$base_url/stats" | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    print(int(((d.get("prefix_cache") or {}).get("totals") or {}).get("cache_read_tokens",0)))
+except Exception:
+    print(0)
+'
+}
+
+get_copilot_cache_savings_usd() {
+  local base_url="$1"
+  curl -s --max-time 8 "$base_url/stats" | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    print(float((d.get("cost") or {}).get("cache_savings_usd",0.0)))
+except Exception:
+    print(0.0)
+'
+}
+
+run_copilot_cache_probe() {
+  # Send the SAME large stable prompt twice so the provider (GitHub Copilot for
+  # Claude models) serves the second from its automatic prompt cache and reports
+  # cached_tokens. Unlike the compression probe, the payload is stable (no run id)
+  # so the provider cache can hit.
+  local base_url="$1"
+  local model="$2"
+  local payload_file
+  payload_file=$(make_tmp)
+  python3 - "$payload_file" "$model" <<'PY'
+import json, sys
+out, model = sys.argv[1], sys.argv[2]
+arr = [{"id": i % 25, "name": f"item{i % 25}", "status": "ok", "count": i,
+        "payload": "x" * 60} for i in range(500)]
+big = json.dumps(arr)
+msgs = [
+    {"role": "user", "content": "Analyze this dataset and remember it."},
+    {"role": "assistant", "content": None,
+     "tool_calls": [{"id": "call_cache", "type": "function",
+                     "function": {"name": "fetch", "arguments": "{}"}}]},
+    {"role": "tool", "tool_call_id": "call_cache", "content": big},
+    {"role": "assistant", "content": "Loaded."},
+    {"role": "user", "content": "Ready?"},
+    {"role": "assistant", "content": "Yes."},
+]
+with open(out, "w", encoding="utf-8") as f:
+    f.write(json.dumps({"model": model, "messages": msgs, "max_tokens": 8, "stream": False},
+                       separators=(",", ":")))
+PY
+  local n
+  for n in 1 2; do
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 \
+      "$base_url/v1/chat/completions" -H "Content-Type: application/json" \
+      --data-binary @"$payload_file" 2>/dev/null || echo "000")
+    sleep 1
+  done
+}
+
 run_copilot_compression_probe() {
   # Build a compressible OpenAI-format conversation and POST it to the Copilot
   # lane (:4000). A large, stale tool result sits early in history (outside the
@@ -555,6 +617,30 @@ if [[ "$HTTP_CODE" == "200" && -n "$COPILOT_TEST_MODEL" ]]; then
   else
     fail "Copilot compression probe removed 0 tokens (saved before=$COP_SAVED_BEFORE after=$COP_SAVED_AFTER, model: $COPILOT_TEST_MODEL, probe HTTP $COP_PROBE_HTTP)"
     info "A compressible payload (large stale tool result) should yield savings; check headroom compression pipeline on :4000."
+  fi
+else
+  info "Skipped: Copilot e2e did not resolve a working model above."
+fi
+echo
+
+# --- Test 4c: Copilot prefix-cache savings pricing (:4000) ---
+# Provider auto-caching (Copilot for Claude) reports cached_tokens; headroom
+# records them but cannot price them, so the unified patch values them via
+# models.dev. Guard: when cache reads are observed, the priced savings must be > 0.
+echo "[ Test 4c: Copilot prefix-cache savings pricing (:4000) ]"
+if [[ "$HTTP_CODE" == "200" && -n "$COPILOT_TEST_MODEL" ]]; then
+  run_copilot_cache_probe "$GATEWAY" "$COPILOT_TEST_MODEL"
+  CACHE_READ_TOKENS=$(get_copilot_cache_read_tokens "$GATEWAY")
+  CACHE_SAVINGS=$(get_copilot_cache_savings_usd "$GATEWAY")
+  if [[ "$CACHE_READ_TOKENS" -gt 0 ]]; then
+    NONZERO=$(python3 -c "print(1 if float('$CACHE_SAVINGS') > 0 else 0)" 2>/dev/null || echo 0)
+    if [[ "$NONZERO" == "1" ]]; then
+      ok "Copilot prefix-cache savings priced (${CACHE_READ_TOKENS} cache-read tokens -> \$${CACHE_SAVINGS}, model: $COPILOT_TEST_MODEL)"
+    else
+      fail "Copilot reported ${CACHE_READ_TOKENS} cache-read tokens but priced savings is \$${CACHE_SAVINGS} (models.dev pricing or attribution regressed)"
+    fi
+  else
+    info "Provider did not report cached tokens this run (caching not observed) — pricing path not exercised."
   fi
 else
   info "Skipped: Copilot e2e did not resolve a working model above."

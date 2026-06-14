@@ -138,6 +138,11 @@ Optional compression tuning (Copilot/OpenAI lane; enabled by Headway defaults):
 
 These defaults improve practical savings for coding-agent workloads (large user turns and older tool outputs) while keeping the last recent context protected. Override any of them in `.env` if you want a more conservative or more aggressive tradeoff.
 
+Two distinct savings show up on the Copilot/OpenAI lane:
+
+- **Compression** — token removal from stale/compressible context (the `tokens_saved` / "Tokens Removed" figures). Stable coding-agent prefixes are intentionally left frozen to preserve provider prompt-cache hits, so compression savings are low when context is mostly stable.
+- **Prefix caching** — GitHub Copilot automatically caches Claude prompts and reports `cached_tokens`; those reads bill at ~10% of input. Headway prices that discount from the models.dev snapshot and surfaces it as `cache_savings_usd` in `./headway stats` and the dashboard's prefix-cache panel. This is usually the larger win for stable agent sessions.
+
 Bedrock native lane savings (enabled by default):
 
 - `:4002` traffic passes through Headway's Python runtime patch before Rust SigV4 forwarding.
