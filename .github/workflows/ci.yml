@@ -120,7 +120,7 @@ jobs:
           set -euo pipefail
           # Exclude runtime-only Docker patches: they import headroom/fastapi/httpx
           # which only exist inside the container and cannot be resolved in CI.
-          mapfile -t files < <(git ls-files '*.py' | grep -Ev 'scripts/runtime/headroom/headroom_patch/|scripts/runtime/headroom/headroom-entrypoint\.py')
+          mapfile -t files < <(git ls-files '*.py' | grep -Ev 'scripts/runtime/headroom/headroom_patch/')
           if [ "${#files[@]}" -gt 0 ]; then
             uvx ty check --error-on-warning "${files[@]}"
           fi
