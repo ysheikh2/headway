@@ -204,6 +204,7 @@ For other tools/extensions, use equivalent provider settings:
 - Health snapshot: `./headway doctor`
 - Full smoke tests: `./headway test`
 - Savings/usage view: `./headway stats`
+- Web dashboard: `http://127.0.0.1:4000/dashboard`
 - Stop: `./headway down`
 
 ## Failure Recovery
