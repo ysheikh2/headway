@@ -71,8 +71,6 @@ Primary commands:
 - `reset` - remove stack and optional local state
 - `secret-scan` - run local secret scan
 
-Back-compat note: `./headroom-proxy` remains as a shim that forwards to `./headway`.
-
 ## Quick Start
 
 1. Ensure Docker Desktop is running.
