@@ -1292,8 +1292,8 @@ cmd_uninstall() {
     zsh) rc_file="$HOME/.zshrc" ;;
     bash) rc_file="$HOME/.bashrc" ;;
   esac
-  if [[ -n "$rc_file" && -f "$rc_file" ]] && \
-     (grep -qF "# headway tab completion" "$rc_file" 2>/dev/null || \
+  if [[ -n "$rc_file" && -f "$rc_file" ]] &&
+    (grep -qF "# headway tab completion" "$rc_file" 2>/dev/null ||
       grep -qF "headway completion" "$rc_file" 2>/dev/null); then
     local tmp
     tmp="$(mktemp)"
@@ -1389,8 +1389,8 @@ setup_shell_completion() {
 
   # Idempotency: skip if the eval line is already present.
   # installer.sh writes "# headway tab completion"; legacy manual adds write "headway completion".
-  if grep -qF "# headway tab completion" "$rc_file" 2>/dev/null || \
-     grep -qF "headway completion" "$rc_file" 2>/dev/null; then
+  if grep -qF "# headway tab completion" "$rc_file" 2>/dev/null ||
+    grep -qF "headway completion" "$rc_file" 2>/dev/null; then
     echo "- completion: already configured in $rc_file (skipped)"
     return 0
   fi
