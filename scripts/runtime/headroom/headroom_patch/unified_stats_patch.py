@@ -83,6 +83,13 @@ def _lookup_record(display_model: str) -> dict[str, float] | None:
     if key in pricing:
         return pricing[key]
 
+    # LiteLLM reports GitHub Copilot models as "copilot-<model>" but models.dev
+    # stores them under "github-copilot/<model>" — try the canonical form first.
+    if key.startswith("copilot-"):
+        canonical = "github-copilot/" + key[len("copilot-") :]
+        if canonical in pricing:
+            return pricing[canonical]
+
     # Substring match: the display model id and stored ids may differ by region prefix
     # or version suffix. Pick the longest matching stored id (most specific).
     best: dict[str, float] | None = None
