@@ -159,7 +159,7 @@ do_install() {
     if [[ -n "$REPO_BRANCH" ]]; then
       git -C "$INSTALL_DIR" checkout -B "$REPO_BRANCH" "origin/$REPO_BRANCH"
     else
-      git -C "$INSTALL_DIR" merge --ff-only
+      git -C "$INSTALL_DIR" merge --ff-only FETCH_HEAD
     fi
     local new_ref
     new_ref="$(git -C "$INSTALL_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")"
