@@ -91,6 +91,9 @@ jobs:
       - name: Create pull request
         id: cpr
         if: steps.changes.outputs.has_changes == 'true'
+        # Requires "Allow GitHub Actions to create and approve pull requests" in
+        # Settings → Actions → General. Without it the step is skipped gracefully.
+        continue-on-error: true
         uses: peter-evans/create-pull-request@v7.0.8
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -112,8 +115,14 @@ jobs:
 
       - name: Enable auto-merge on created PR
         if: steps.cpr.outputs.pull-request-url != ''
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           gh pr merge "${{ steps.cpr.outputs.pull-request-url }}" --auto --squash
+
+      - name: Notice if PR creation was skipped
+        if: steps.changes.outputs.has_changes == 'true' && steps.cpr.outcome != 'success'
+        run: |
+          echo "::warning::Compat record changed but auto-PR failed. Enable 'Allow GitHub Actions to create and approve pull requests' in Settings → Actions → General, or open a PR from branch chore/sync-upstream-patch-compat manually."
