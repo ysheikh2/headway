@@ -541,13 +541,30 @@ wait_for_copilot_auth() {
     if [[ -n "$code" && "$code" != "$last_code" ]]; then
       echo "  Current code: $code  →  https://github.com/login/device"
       last_code="$code"
-      # On macOS: copy code to clipboard and open the auth page automatically.
+      # Copy code to clipboard (macOS / Linux X11 / Linux Wayland / WSL2).
       if command -v pbcopy >/dev/null 2>&1; then
         printf '%s' "$code" | pbcopy
         echo "  (code copied to clipboard)"
+      elif command -v clip.exe >/dev/null 2>&1; then
+        printf '%s' "$code" | clip.exe
+        echo "  (code copied to clipboard)"
+      elif command -v wl-copy >/dev/null 2>&1; then
+        printf '%s' "$code" | wl-copy
+        echo "  (code copied to clipboard)"
+      elif command -v xclip >/dev/null 2>&1; then
+        printf '%s' "$code" | xclip -selection clipboard
+        echo "  (code copied to clipboard)"
+      elif command -v xsel >/dev/null 2>&1; then
+        printf '%s' "$code" | xsel --clipboard --input
+        echo "  (code copied to clipboard)"
       fi
+      # Open the auth page in the default browser.
       if command -v open >/dev/null 2>&1; then
         open "https://github.com/login/device" 2>/dev/null || true
+      elif command -v xdg-open >/dev/null 2>&1; then
+        xdg-open "https://github.com/login/device" 2>/dev/null || true
+      elif command -v cmd.exe >/dev/null 2>&1; then
+        cmd.exe /c start "https://github.com/login/device" 2>/dev/null || true
       fi
     fi
     sleep 5
