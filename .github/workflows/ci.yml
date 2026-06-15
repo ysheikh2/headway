@@ -249,13 +249,12 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Validate patch applies to recorded upstream SHA
+      - name: Validate patch applies to upstream main
         run: |
           set -euo pipefail
-          sha="$(python -c "import json; d=json.load(open('scripts/build/headroom_upstream/upstream_patch_compat.json')); print(d['resolved_sha'])")"
           python scripts/build/headroom_upstream/check_upstream_patch_compat.py \
             --repo chopratejas/headroom \
-            --ref "$sha"
+            --ref main
 
   autofix:
     name: Auto-fix formatting
