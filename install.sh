@@ -105,7 +105,16 @@ do_install() {
   rc_file="$(detect_shell_rc)"
   shell_name="$(detect_shell_name)"
 
-  if [[ -n "$rc_file" ]]; then
+  # Fish uses a different config model: write the completion file directly,
+  # PATH management is handled separately via fish_add_path or config.fish.
+  if [[ "$shell_name" == "fish" ]]; then
+    info "Configuring shell (fish)..."
+    local fish_dir="$HOME/.config/fish/completions"
+    mkdir -p "$fish_dir"
+    bash "$INSTALL_DIR/headway" completion fish >"$fish_dir/headway.fish"
+    success "fish completions installed to $fish_dir/headway.fish"
+    warn "Add ~/.local/bin to PATH in fish: fish_add_path ~/.local/bin"
+  elif [[ -n "$rc_file" ]]; then
     info "Configuring shell ($shell_name)..."
 
     # Ensure ~/.local/bin is on PATH
@@ -113,15 +122,7 @@ do_install() {
       add_to_path_in_rc "$rc_file" "$(dirname "$SYMLINK")"
     fi
 
-    # Fish: write completion file directly
-    if [[ "$shell_name" == "fish" ]]; then
-      local fish_dir="$HOME/.config/fish/completions"
-      mkdir -p "$fish_dir"
-      bash "$INSTALL_DIR/headway" completion fish >"$fish_dir/headway.fish"
-      success "fish completions installed to $fish_dir/headway.fish"
-    else
-      add_completion_to_rc "$rc_file" "$shell_name"
-    fi
+    add_completion_to_rc "$rc_file" "$shell_name"
   else
     warn "unrecognised shell '$shell_name' — add tab completion manually: eval \"\$(headway completion bash)\""
   fi

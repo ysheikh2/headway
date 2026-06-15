@@ -548,6 +548,7 @@ cmd_update() {
 cmd_restart() {
   require_docker
   load_env
+  require_env
   sync_headroom_tuning_env
 
   docker compose -f "$COMPOSE_FILE" down
@@ -1025,7 +1026,8 @@ cmd_uninstall() {
   if [[ -n "$rc_file" && -f "$rc_file" ]] && grep -qF "headway completion" "$rc_file" 2>/dev/null; then
     local tmp
     tmp="$(mktemp)"
-    grep -vF "headway completion" "$rc_file" >"$tmp" && mv "$tmp" "$rc_file"
+    grep -vF "headway completion" "$rc_file" >"$tmp" || true
+    mv "$tmp" "$rc_file"
     echo "removed completion lines from $rc_file"
   fi
   # Fish: remove completion file

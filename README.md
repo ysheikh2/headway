@@ -73,7 +73,7 @@ Primary commands:
 - `config setup [kilo|claude|all]` - write client presets (Kilo and/or Claude Code)
 - `cleanup <data|images|kilo|claude|all>` - remove specific local state or client configs
 - `uninstall` - stop services, remove all data/images/configs, remove headway itself
-- `completion [bash|zsh|fish]` - print shell tab-completion script
+- `completion [bash|zsh|fish|auto]` - print shell tab-completion script (auto-detects shell if omitted)
 - `secret-scan` - run local secret scan
 
 ## Supported Systems

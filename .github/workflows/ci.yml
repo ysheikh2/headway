@@ -1,5 +1,8 @@
 name: CI
 
+# Action versions use tags rather than SHA pins — intentional for this small
+# private repo where supply-chain risk is low and tag readability wins.
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 

@@ -53,16 +53,21 @@ if "$HEADWAY" completion zsh | bash -n 2>&1; then
 else
   fail "completion zsh — bash -n rejected output"
 fi
+if "$HEADWAY" completion fish | grep -q "complete -c headway"; then
+  ok "completion fish — contains expected complete -c headway directives"
+else
+  fail "completion fish — missing expected complete -c headway directives"
+fi
 
 # ── 2. require_env: missing .env ─────────────────────────────────────────────
 echo
 echo "[ Test 2: require_env — missing .env ]"
 tmpdir="$(make_isolated_copy)"
-out="$("$tmpdir/headway" config setup kilo 2>&1)" || true
-if echo "$out" | grep -q "ERROR:.*\.env not found"; then
-  ok "missing .env → correct error"
+out="$("$tmpdir/headway" config setup kilo 2>&1)" && status=0 || status=$?
+if [[ "$status" -ne 0 ]] && echo "$out" | grep -q "ERROR:.*\.env not found"; then
+  ok "missing .env → exit $status with correct error"
 else
-  fail "missing .env → unexpected output: $out"
+  fail "missing .env → exit $status, output: $out"
 fi
 rm -rf "$tmpdir"
 
@@ -71,11 +76,11 @@ echo
 echo "[ Test 3: require_env — AWS_PROFILE not in .env ]"
 tmpdir="$(make_isolated_copy)"
 echo "AWS_REGION=us-east-1" >"$tmpdir/.env"
-out="$(AWS_PROFILE= "$tmpdir/headway" config setup kilo 2>&1)" || true
-if echo "$out" | grep -q "ERROR:.*AWS_PROFILE"; then
-  ok "missing AWS_PROFILE → correct error"
+out="$(AWS_PROFILE= "$tmpdir/headway" config setup kilo 2>&1)" && status=0 || status=$?
+if [[ "$status" -ne 0 ]] && echo "$out" | grep -q "ERROR:.*AWS_PROFILE"; then
+  ok "missing AWS_PROFILE → exit $status with correct error"
 else
-  fail "missing AWS_PROFILE → unexpected output: $out"
+  fail "missing AWS_PROFILE → exit $status, output: $out"
 fi
 rm -rf "$tmpdir"
 
@@ -84,11 +89,11 @@ echo
 echo "[ Test 4: require_env — AWS_REGION not in .env ]"
 tmpdir="$(make_isolated_copy)"
 echo "AWS_PROFILE=test-profile" >"$tmpdir/.env"
-out="$(AWS_REGION= "$tmpdir/headway" config setup kilo 2>&1)" || true
-if echo "$out" | grep -q "ERROR:.*AWS_REGION"; then
-  ok "missing AWS_REGION → correct error"
+out="$(AWS_REGION= "$tmpdir/headway" config setup kilo 2>&1)" && status=0 || status=$?
+if [[ "$status" -ne 0 ]] && echo "$out" | grep -q "ERROR:.*AWS_REGION"; then
+  ok "missing AWS_REGION → exit $status with correct error"
 else
-  fail "missing AWS_REGION → unexpected output: $out"
+  fail "missing AWS_REGION → exit $status, output: $out"
 fi
 rm -rf "$tmpdir"
 
@@ -120,11 +125,11 @@ rm -rf "$tmpdir"
 # ── 7. cleanup: invalid target is rejected ───────────────────────────────────
 echo
 echo "[ Test 7: cleanup — invalid target rejected ]"
-out="$("$HEADWAY" cleanup bogus 2>&1)" || true
-if echo "$out" | grep -q "Unknown cleanup arg"; then
-  ok "cleanup bogus → correct error"
+out="$("$HEADWAY" cleanup bogus 2>&1)" && status=0 || status=$?
+if [[ "$status" -ne 0 ]] && echo "$out" | grep -q "Unknown cleanup arg"; then
+  ok "cleanup bogus → exit $status with correct error"
 else
-  fail "cleanup bogus → unexpected output: $out"
+  fail "cleanup bogus → exit $status, output: $out"
 fi
 
 # ── Summary ──────────────────────────────────────────────────────────────────
