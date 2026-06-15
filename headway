@@ -924,6 +924,64 @@ cmd_secret_scan() {
   exec bash "$ROOT_DIR/scripts/cli/secret-scan.sh" "$@"
 }
 
+cmd_completion() {
+  local shell="${1:-bash}"
+  local completion_script="$ROOT_DIR/scripts/cli/headway-completion.bash"
+
+  case "$shell" in
+    bash)
+      cat "$completion_script"
+      ;;
+    zsh)
+      cat <<'ZSHEOF'
+# headway zsh completion — wraps the bash completion via bashcompinit.
+autoload -Uz bashcompinit 2>/dev/null && bashcompinit 2>/dev/null
+ZSHEOF
+      cat "$completion_script"
+      ;;
+    fish)
+      cat <<'FISHEOF'
+# headway fish completion
+
+set -l _hw_cmds init up down auth doctor test update stats config secret-scan reset completion help
+
+complete -c headway -f -n '__fish_use_subcommand' -a "$_hw_cmds"
+
+# init
+complete -c headway -n '__fish_seen_subcommand_from init' -l aws-profile -d 'AWS profile name'
+complete -c headway -n '__fish_seen_subcommand_from init' -l skip-config -d 'Skip Kilo/Claude config generation'
+
+# up
+complete -c headway -n '__fish_seen_subcommand_from up' -l aws-profile -d 'AWS profile name'
+complete -c headway -n '__fish_seen_subcommand_from up' -l regen-config -d 'Regenerate litellm_config.yaml before starting'
+
+# update
+complete -c headway -n '__fish_seen_subcommand_from update' -l regen-config -d 'Regenerate litellm_config.yaml before updating'
+
+# config subcommands
+complete -c headway -n '__fish_seen_subcommand_from config' -a 'regen setup show'
+complete -c headway -n '__fish_seen_subcommand_from config; and __fish_seen_subcommand_from regen' -l aws-profile -d 'AWS profile name'
+complete -c headway -n '__fish_seen_subcommand_from config; and __fish_seen_subcommand_from regen' -l bedrock-discovery-aws-profile -d 'Bedrock discovery profile'
+complete -c headway -n '__fish_seen_subcommand_from config; and __fish_seen_subcommand_from setup' -a 'kilo claude all'
+
+# reset
+complete -c headway -n '__fish_seen_subcommand_from reset' -l yes -d 'Skip confirmation prompt'
+complete -c headway -n '__fish_seen_subcommand_from reset' -l purge-data -d 'Remove .data directory'
+complete -c headway -n '__fish_seen_subcommand_from reset' -l prune-images -d 'Remove pulled Docker images'
+complete -c headway -n '__fish_seen_subcommand_from reset' -l cleanup-kilo -d 'Remove Kilo config'
+complete -c headway -n '__fish_seen_subcommand_from reset' -l cleanup-claude -d 'Remove Claude Code config'
+
+# completion
+complete -c headway -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'
+FISHEOF
+      ;;
+    *)
+      echo "Unknown shell: $shell. Supported: bash, zsh, fish" >&2
+      exit 1
+      ;;
+  esac
+}
+
 print_help() {
   cat <<'EOF'
 Usage: ./headway <command> [args]
@@ -964,6 +1022,12 @@ Commands:
 
   reset [--yes] [--purge-data] [--prune-images] [--cleanup-kilo] [--cleanup-claude]
       Remove stack and optional local state
+
+  completion [bash|zsh|fish]
+      Print shell completion script (default: bash)
+      Usage: eval "$(./headway completion bash)"   # add to ~/.bashrc
+             eval "$(./headway completion zsh)"    # add to ~/.zshrc
+             ./headway completion fish > ~/.config/fish/completions/headway.fish
 
   help
       Show this message
@@ -1011,6 +1075,9 @@ main() {
       ;;
     reset)
       cmd_reset "$@"
+      ;;
+    completion)
+      cmd_completion "$@"
       ;;
     help | -h | --help)
       print_help
