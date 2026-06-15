@@ -511,8 +511,13 @@ except Exception:
 }
 
 # Read the most-recently-issued device code from litellm-gateway logs.
+# Accepts an optional --since timestamp to exclude stale codes from prior
+# sessions or restarts.
 copilot_current_code() {
-  docker logs litellm-gateway 2>/dev/null |
+  local since="${1:-}"
+  local docker_args=(litellm-gateway)
+  [[ -n "$since" ]] && docker_args=(--since "$since" litellm-gateway)
+  docker logs "${docker_args[@]}" 2>/dev/null |
     grep -oE 'code [A-Z0-9]{4}-[A-Z0-9]{4}' |
     tail -1 |
     awk '{print $2}' || true
@@ -560,7 +565,7 @@ wait_for_copilot_auth() {
     fi
 
     local code
-    code=$(copilot_current_code)
+    code=$(copilot_current_code "$logs_since")
     if [[ -n "$code" && "$code" != "$last_code" ]]; then
       echo "  Current code: $code  →  https://github.com/login/device"
       last_code="$code"
