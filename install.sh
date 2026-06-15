@@ -163,8 +163,12 @@ do_install() {
       git -C "$INSTALL_DIR" fetch origin "$REPO_BRANCH"
       git -C "$INSTALL_DIR" checkout -B "$REPO_BRANCH" "origin/$REPO_BRANCH"
     else
-      git -C "$INSTALL_DIR" fetch origin main
-      git -C "$INSTALL_DIR" checkout -B main "origin/main"
+      local default_branch
+      default_branch="$(git -C "$INSTALL_DIR" ls-remote --symref origin HEAD 2>/dev/null |
+        awk '/^ref:/{sub("refs/heads/", ""); print $2; exit}')"
+      default_branch="${default_branch:-main}"
+      git -C "$INSTALL_DIR" fetch origin "$default_branch"
+      git -C "$INSTALL_DIR" checkout -B "$default_branch" "origin/$default_branch"
     fi
     local new_ref
     new_ref="$(git -C "$INSTALL_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")"
