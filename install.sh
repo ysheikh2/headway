@@ -26,14 +26,26 @@ SYMLINK="${HEADWAY_SYMLINK:-$HOME/.local/bin/headway}"
 # ── arg parsing ───────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --dir)    INSTALL_DIR="$2"; shift 2 ;;
-    --branch) REPO_BRANCH="$2"; shift 2 ;;
-    --symlink) SYMLINK="$2"; shift 2 ;;
-    --help|-h)
+    --dir)
+      INSTALL_DIR="$2"
+      shift 2
+      ;;
+    --branch)
+      REPO_BRANCH="$2"
+      shift 2
+      ;;
+    --symlink)
+      SYMLINK="$2"
+      shift 2
+      ;;
+    --help | -h)
       echo "Usage: bash install.sh [--dir <path>] [--branch <name>] [--symlink <path>]"
       exit 0
       ;;
-    *) echo "Unknown option: $1" >&2; exit 1 ;;
+    *)
+      echo "Unknown option: $1" >&2
+      exit 1
+      ;;
   esac
 done
 
