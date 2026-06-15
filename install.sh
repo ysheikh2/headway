@@ -161,14 +161,14 @@ do_install() {
     info "Found existing install ($prev_ref) — pulling latest..."
     if [[ -n "$REPO_BRANCH" ]]; then
       git -C "$INSTALL_DIR" fetch origin "$REPO_BRANCH"
-      git -C "$INSTALL_DIR" checkout -B "$REPO_BRANCH" "origin/$REPO_BRANCH"
+      git -C "$INSTALL_DIR" checkout -B "$REPO_BRANCH" FETCH_HEAD
     else
       local default_branch
       default_branch="$(git -C "$INSTALL_DIR" ls-remote --symref origin HEAD 2>/dev/null |
         awk '/^ref:/{sub("refs/heads/", ""); print $2; exit}')"
       default_branch="${default_branch:-main}"
       git -C "$INSTALL_DIR" fetch origin "$default_branch"
-      git -C "$INSTALL_DIR" checkout -B "$default_branch" "origin/$default_branch"
+      git -C "$INSTALL_DIR" checkout -B "$default_branch" FETCH_HEAD
     fi
     local new_ref
     new_ref="$(git -C "$INSTALL_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")"
