@@ -97,7 +97,7 @@ Dashboard: `http://127.0.0.1:4000/dashboard`
 
 ## CLI Reference
 
-```
+```bash
 headway <command>
 ```
 
@@ -135,19 +135,34 @@ Set up both presets at once:
 headway config setup all
 ```
 
-**Kilo** writes to `~/.kilo/settings.json`:
+**Kilo** writes to `~/.config/kilo/kilo.jsonc`:
 
 - `github-copilot.options.baseURL = "http://127.0.0.1:4000/v1"`
 - `openai-compatible.options.baseURL = "http://127.0.0.1:4000/v1"`
 - `amazon-bedrock.options.baseURL = "http://127.0.0.1:4002"`
 
-**Claude Code (VS Code)** writes to `~/Library/Application Support/Code/User/settings.json` (macOS):
+**Claude Code (VS Code)** writes `claudeCode.environmentVariables` into your VS Code `settings.json`:
 
 - `CLAUDE_CODE_USE_BEDROCK=1`
 - `AWS_PROFILE=<BEDROCK_AWS_PROFILE>`
 - `AWS_REGION=<AWS_REGION>`
 
-Override the Claude Code settings path with `CLAUDE_CODE_SETTINGS` before running `headway config setup claude`.
+Default settings path (auto-detected by OS):
+
+| OS | Default path |
+|---|---|
+| macOS | `~/Library/Application Support/Code/User/settings.json` |
+| Linux | `~/.config/Code/User/settings.json` |
+| Windows (WSL2) | Set `CLAUDE_CODE_SETTINGS` to your Windows path (see below) |
+
+Override for any platform:
+
+```bash
+export CLAUDE_CODE_SETTINGS="/path/to/settings.json"
+headway config setup claude
+```
+
+Windows users running VS Code natively (not VS Code Remote) should point `CLAUDE_CODE_SETTINGS` at `$APPDATA/Code/User/settings.json` from within WSL2.
 
 ## Daily Operations
 

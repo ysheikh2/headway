@@ -7,7 +7,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 ENV_FILE="$ROOT_DIR/.env"
 KILO_CONF="$HOME/.config/kilo/kilo.jsonc"
-CLAUDE_CODE_SETTINGS_DEFAULT="$HOME/Library/Application Support/Code/User/settings.json"
+case "$(uname -s 2>/dev/null)" in
+  Darwin) CLAUDE_CODE_SETTINGS_DEFAULT="$HOME/Library/Application Support/Code/User/settings.json" ;;
+  *)      CLAUDE_CODE_SETTINGS_DEFAULT="$HOME/.config/Code/User/settings.json" ;;
+esac
 CLAUDE_CODE_SETTINGS="${CLAUDE_CODE_SETTINGS:-$CLAUDE_CODE_SETTINGS_DEFAULT}"
 PY_HELPER="$ROOT_DIR/scripts/cli/headroom_python.py"
 
