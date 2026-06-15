@@ -349,7 +349,9 @@ def _apply_prefix_cache_pricing(payload: dict[str, Any]) -> None:
     summary = _as_dict(payload.get("summary"))
     sum_cost = _as_dict(summary.get("cost"))
     breakdown = _as_dict(sum_cost.get("breakdown"))
-    breakdown["cache_savings_usd"] = float(breakdown.get("cache_savings_usd") or 0.0) + total_read_savings
+    breakdown["cache_savings_usd"] = (
+        float(breakdown.get("cache_savings_usd") or 0.0) + total_read_savings
+    )
     sum_cost["breakdown"] = breakdown
     sum_cost["total_saved_usd"] = float(sum_cost.get("total_saved_usd") or 0.0) + net
     summary["cost"] = sum_cost
