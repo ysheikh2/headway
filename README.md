@@ -13,10 +13,12 @@ This repository is an operations wrapper around upstream projects. It is not a f
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ysheikh2/headway/main/install.sh | bash
+bash <(curl -fsSL https://raw.githubusercontent.com/ysheikh2/headway/main/install.sh)
 ```
 
-This clones headway to `~/headway`, creates a `headway` symlink at `~/.local/bin/headway`, wires up shell tab-completion, and optionally walks you through `headway init` and `headway up`.
+This clones headway to `~/headway`, creates a `headway` symlink at `~/.local/bin/headway`, wires up shell tab-completion, and walks you through `headway init` and `headway up` interactively.
+
+> **Note:** The `bash <(curl ...)` process-substitution form keeps your terminal attached so the guided setup prompts work. The traditional `curl | bash` pipe form installs without the guided flow (you'd run `headway init && headway up` manually afterwards).
 
 **Prerequisites:** `git`, `docker` (with Compose), `aws` CLI, `python3`.
 
@@ -76,8 +78,8 @@ headway init --aws-profile <your-profile>
 AWS profile behavior:
 
 - `AWS_PROFILE` (required): primary profile for the LiteLLM lane
-- `BEDROCK_AWS_PROFILE` (required): native Bedrock runtime profile; set to the same value as `AWS_PROFILE` if you only have one
-- `BEDROCK_DISCOVERY_AWS_PROFILE` (optional): profile used by `headway config regen`; defaults to `BEDROCK_AWS_PROFILE`
+- `BEDROCK_AWS_PROFILE` (defaults to `AWS_PROFILE`): native Bedrock runtime profile; set separately only if you use a different profile for Bedrock
+- `BEDROCK_DISCOVERY_AWS_PROFILE` (defaults to `BEDROCK_AWS_PROFILE`): profile used by `headway config regen`
 
 ### Start the gateway
 
