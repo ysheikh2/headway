@@ -26,6 +26,8 @@ jobs:
       shell: ${{ steps.filter.outputs.shell }}
       python: ${{ steps.filter.outputs.python }}
       yaml: ${{ steps.filter.outputs.yaml }}
+      dashboard: ${{ steps.filter.outputs.dashboard }}
+      compat: ${{ steps.filter.outputs.compat }}
       relevant: ${{ steps.filter.outputs.relevant }}
 
     steps:
@@ -45,6 +47,10 @@ jobs:
             yaml:
               - '**/*.yml'
               - '**/*.yaml'
+            dashboard:
+              - 'scripts/runtime/headroom/dashboard.html'
+            compat:
+              - 'scripts/build/headroom_upstream/upstream_patch_compat.json'
             relevant:
               - '**'
               - '!LICENSE'
@@ -206,6 +212,51 @@ jobs:
       - name: Secret scan
         run: ./scripts/cli/secret-scan.sh
 
+  dashboard-check:
+    name: Dashboard patch validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: detect-changes
+    if: needs.detect-changes.outputs.dashboard == 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.3
+
+      - name: Set up Python
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Validate dashboard matches upstream + patch
+        run: |
+          set -euo pipefail
+          python scripts/runtime/headroom/sync_dashboard.py --check
+
+  compat-check:
+    name: Upstream patch compat validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: detect-changes
+    if: needs.detect-changes.outputs.compat == 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.3
+
+      - name: Set up Python
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Validate patch applies to recorded upstream SHA
+        run: |
+          set -euo pipefail
+          sha="$(python -c "import json; d=json.load(open('scripts/build/headroom_upstream/upstream_patch_compat.json')); print(d['resolved_sha'])")"
+          python scripts/build/headroom_upstream/check_upstream_patch_compat.py \
+            --repo chopratejas/headroom \
+            --ref "$sha"
+
   autofix:
     name: Auto-fix formatting
     runs-on: ubuntu-latest
@@ -300,6 +351,8 @@ jobs:
       - python-checks
       - yaml-actions-checks
       - compose-security-checks
+      - dashboard-check
+      - compat-check
       - autofix
     if: always()
 
@@ -332,4 +385,12 @@ jobs:
 
           if [ "${{ needs.detect-changes.outputs.relevant }}" == "true" ]; then
             [[ "${{ needs.compose-security-checks.result }}" == "success" ]]
+          fi
+
+          if [ "${{ needs.detect-changes.outputs.dashboard }}" == "true" ]; then
+            [[ "${{ needs.dashboard-check.result }}" == "success" ]]
+          fi
+
+          if [ "${{ needs.detect-changes.outputs.compat }}" == "true" ]; then
+            [[ "${{ needs.compat-check.result }}" == "success" ]]
           fi
