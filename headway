@@ -429,6 +429,8 @@ cmd_init() {
     generate_config "$aws_profile_name" "$discovery_profile"
   fi
 
+  setup_shell_completion
+
   echo "init complete"
   echo "- AWS_PROFILE: $aws_profile_name"
   echo "- BEDROCK_AWS_PROFILE: $bedrock_profile"
@@ -922,6 +924,66 @@ cmd_test() {
 
 cmd_secret_scan() {
   exec bash "$ROOT_DIR/scripts/cli/secret-scan.sh" "$@"
+}
+
+setup_shell_completion() {
+  local shell_name
+  shell_name="$(basename "${SHELL:-}")"
+
+  local rc_file eval_line
+
+  case "$shell_name" in
+    zsh)
+      rc_file="$HOME/.zshrc"
+      eval_line="eval \"\$(\"$ROOT_DIR/headway\" completion zsh)\"  # headway tab completion"
+      ;;
+    bash)
+      rc_file="$HOME/.bashrc"
+      eval_line="eval \"\$(\"$ROOT_DIR/headway\" completion bash)\"  # headway tab completion"
+      ;;
+    fish)
+      local fish_completions_dir="$HOME/.config/fish/completions"
+      local fish_target="$fish_completions_dir/headway.fish"
+      if [[ -f "$fish_target" ]]; then
+        echo "- completion: fish completions already installed at $fish_target (skipped)"
+        return 0
+      fi
+      if [[ ! -t 0 ]]; then
+        return 0
+      fi
+      read -r -p "Install fish tab completions to $fish_target? (y/N): " ans
+      if [[ "$ans" =~ ^[Yy]$ ]]; then
+        mkdir -p "$fish_completions_dir"
+        bash "$ROOT_DIR/headway" completion fish >"$fish_target"
+        echo "- completion: fish completions installed — restart your shell"
+      else
+        echo "- completion: skipped (run './headway completion fish > $fish_target' later)"
+      fi
+      return 0
+      ;;
+    *)
+      echo "- completion: unsupported shell '$shell_name' — run './headway completion bash|zsh|fish' manually"
+      return 0
+      ;;
+  esac
+
+  # Idempotency: skip if the eval line (or anything referencing headway completion) is already present.
+  if grep -qF "headway completion" "$rc_file" 2>/dev/null; then
+    echo "- completion: already configured in $rc_file (skipped)"
+    return 0
+  fi
+
+  if [[ ! -t 0 ]]; then
+    return 0
+  fi
+
+  read -r -p "Add tab completion to $rc_file? (y/N): " ans
+  if [[ "$ans" =~ ^[Yy]$ ]]; then
+    printf '\n%s\n' "$eval_line" >>"$rc_file"
+    echo "- completion: added to $rc_file — run 'source $rc_file' or open a new shell"
+  else
+    echo "- completion: skipped (add manually: $eval_line)"
+  fi
 }
 
 cmd_completion() {
