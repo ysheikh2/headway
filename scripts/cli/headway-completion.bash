@@ -1,23 +1,26 @@
 #!/usr/bin/env bash
 # Tab completion for the headway CLI.
 #
-# Bash: add to ~/.bashrc or ~/.bash_profile:
-#   eval "$(./headway completion bash)"
+# Bash: add to ~/.bashrc:
+#   eval "$(headway completion)"
 #
 # Zsh: add to ~/.zshrc:
-#   eval "$(./headway completion zsh)"
+#   eval "$(headway completion)"
 
 _headway_commands=(
-  init up down auth doctor test update stats config secret-scan reset completion help
+  up down update restart reset auth
+  init config
+  doctor stats test
+  cleanup
+  uninstall secret-scan completion help
 )
 
+_headway_up_flags=(--aws-profile)
 _headway_init_flags=(--aws-profile --skip-config)
-_headway_up_flags=(--aws-profile --regen-config)
-_headway_update_flags=(--regen-config)
-_headway_config_subcommands=(regen setup show)
+_headway_config_subcommands=(show regen setup)
 _headway_config_regen_flags=(--aws-profile --bedrock-discovery-aws-profile)
 _headway_config_setup_targets=(kilo claude all)
-_headway_reset_flags=(--yes --purge-data --prune-images --cleanup-kilo --cleanup-claude)
+_headway_cleanup_targets=(data images kilo claude all)
 
 _headway_bash_completion() {
   local cur prev words cword
@@ -29,33 +32,28 @@ _headway_bash_completion() {
     cword=$COMP_CWORD
   }
 
-  # Find which top-level command is in effect (words[1] when cword >= 1)
   local cmd=""
   if [[ ${#words[@]} -ge 2 ]]; then
     cmd="${words[1]}"
   fi
 
-  # Complete top-level command
   if [[ $cword -eq 1 ]]; then
     COMPREPLY=($(compgen -W "${_headway_commands[*]}" -- "$cur"))
     return
   fi
 
   case "$cmd" in
-    init)
-      case "$prev" in
-        --aws-profile) COMPREPLY=() ;;
-        *) COMPREPLY=($(compgen -W "${_headway_init_flags[*]}" -- "$cur")) ;;
-      esac
-      ;;
     up)
       case "$prev" in
         --aws-profile) COMPREPLY=() ;;
         *) COMPREPLY=($(compgen -W "${_headway_up_flags[*]}" -- "$cur")) ;;
       esac
       ;;
-    update)
-      COMPREPLY=($(compgen -W "${_headway_update_flags[*]}" -- "$cur"))
+    init)
+      case "$prev" in
+        --aws-profile) COMPREPLY=() ;;
+        *) COMPREPLY=($(compgen -W "${_headway_init_flags[*]}" -- "$cur")) ;;
+      esac
       ;;
     config)
       local sub="${words[2]:-}"
@@ -70,11 +68,14 @@ _headway_bash_completion() {
         COMPREPLY=($(compgen -W "${_headway_config_setup_targets[*]}" -- "$cur"))
       fi
       ;;
-    reset)
-      COMPREPLY=($(compgen -W "${_headway_reset_flags[*]}" -- "$cur"))
+    cleanup)
+      COMPREPLY=($(compgen -W "${_headway_cleanup_targets[*]} --yes" -- "$cur"))
+      ;;
+    reset | uninstall)
+      COMPREPLY=($(compgen -W "--yes" -- "$cur"))
       ;;
     completion)
-      COMPREPLY=($(compgen -W "bash zsh fish" -- "$cur"))
+      COMPREPLY=($(compgen -W "bash zsh fish auto" -- "$cur"))
       ;;
   esac
 }

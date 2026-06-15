@@ -544,7 +544,7 @@ BEDROCK_ANTHROPIC_TEST_MODEL=$(echo "$MODELS" | python3 "$DIR/scripts/cli/headro
 BEDROCK_TEST_MODEL=""
 if [[ -z "$BEDROCK_CANDIDATES" ]]; then
   fail "No bedrock-* model aliases found in /v1/models"
-  info "Fix: ./headway up --regen-config"
+  info "Fix: ./headway update"
   echo
 else
   echo "[ Test 5: AWS Bedrock end-to-end (lowest-cost model preferred) ]"
@@ -801,7 +801,7 @@ if errors:
     fail "kilo.jsonc provider baseURLs are not correctly set"
     info "Copilot/openai-compatible: http://127.0.0.1:4000/v1"
     info "amazon-bedrock:           http://127.0.0.1:4002"
-    info "Fix: ./headway config kilo"
+    info "Fix: ./headway config setup kilo"
   fi
 else
   fail "kilo.jsonc not found at $KILO_CONF"
