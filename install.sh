@@ -200,6 +200,7 @@ do_install() {
     fi
   elif [[ -e "$SYMLINK" ]]; then
     warn "$SYMLINK exists and is not a symlink — overwriting"
+    [[ -d "$SYMLINK" ]] && rm -rf "$SYMLINK"
     ln -sf "$INSTALL_DIR/headway" "$SYMLINK"
     success "symlink created: $SYMLINK → $INSTALL_DIR/headway"
   else

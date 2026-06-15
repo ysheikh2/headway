@@ -430,7 +430,10 @@ copilot_auth_pending() {
 # Used to detect a stale token that needs device re-auth even when the
 # token file still exists on disk.
 copilot_token_expired_in_logs() {
-  docker logs litellm-gateway 2>/dev/null | grep -q "API key expired" || return 1
+  local started_at
+  started_at="$(docker inspect --format='{{.State.StartedAt}}' litellm-gateway 2>/dev/null || true)"
+  docker logs --since "${started_at:-1970-01-01T00:00:00Z}" litellm-gateway 2>/dev/null |
+    grep -q "API key expired" || return 1
 }
 
 # Wipe stale Copilot token files so the next wait_for_copilot_auth call
@@ -497,6 +500,8 @@ except Exception:
     echo "Refreshing model config to include Copilot models..."
     generate_config "$aws_profile_name" "$discovery_profile"
     docker compose -f "$COMPOSE_FILE" restart litellm 2>/dev/null || true
+    wait_for_http "$GATEWAY_URL/livez" 30 2 >/dev/null ||
+      echo "WARNING: gateway did not become healthy after Copilot re-auth"
   else
     # No "expired" log — possibly no Copilot config (init ran before auth).
     # This is a silent no-op; the user can run 'headway auth' later.
@@ -543,7 +548,7 @@ wait_for_copilot_auth() {
     # When exhausted, no new codes are issued and the token file is never written.
     # Use --since to check only logs after the last restart so stale entries
     # from a prior exhaustion don't trigger an immediate second restart.
-    if docker logs litellm-gateway --since "$logs_since" 2>/dev/null |
+    if docker logs --since "$logs_since" litellm-gateway 2>/dev/null |
       grep -q "Failed to get access token after 3 attempts"; then
       echo
       echo "  LiteLLM auth window expired — restarting to issue a fresh code..."
@@ -845,6 +850,7 @@ cmd_restart() {
   local aws_region="$AWS_REGION"
 
   ensure_aws_session "$aws_profile_name" "$aws_region"
+  ensure_aws_session "$bedrock_profile" "$aws_region"
   ensure_aws_session "$discovery_profile" "$aws_region"
 
   docker compose -f "$COMPOSE_FILE" down

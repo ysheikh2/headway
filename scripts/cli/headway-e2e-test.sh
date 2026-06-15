@@ -37,6 +37,11 @@ INSTALL_DIR="${E2E_INSTALL_DIR:-/tmp/headway-e2e-$$}"
 SYMLINK="$INSTALL_DIR/.bin/headway"
 KEEP="${E2E_KEEP:-0}"
 
+die() {
+  echo "  [FATAL] $*" >&2
+  exit 1
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --branch)
@@ -84,10 +89,6 @@ ok() {
 fail() {
   echo "  [FAIL] $*" >&2
   FAIL=$((FAIL + 1))
-}
-die() {
-  echo "  [FATAL] $*" >&2
-  exit 1
 }
 
 # ── cleanup trap ──────────────────────────────────────────────────────────────
@@ -149,7 +150,7 @@ fi
 
 section "2. headway invoked via symlink"
 
-if _ver="$("$SYMLINK" help 2>&1 | head -1)"; then
+if _ver="$("$SYMLINK" help 2>&1 | sed -n '1p')"; then
   ok "headway help via symlink: $_ver"
 else
   fail "headway help via symlink failed"
