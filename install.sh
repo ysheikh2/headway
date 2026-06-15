@@ -143,7 +143,11 @@ do_install() {
       "$INSTALL_DIR/headway" up
       echo
       success "All done — headway is running!"
-      echo "  Reload your shell to activate tab completion: source $rc_file"
+      if [[ "$shell_name" == "fish" ]]; then
+        echo "  Restart fish (or open a new terminal) to activate tab completion"
+      elif [[ -n "$rc_file" ]]; then
+        echo "  Reload your shell to activate tab completion: source $rc_file"
+      fi
       return
     fi
   fi
