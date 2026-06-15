@@ -60,16 +60,20 @@ Use the repo-root CLI for all operations:
 Primary commands:
 
 - `init` - first-time setup (`.env`, AWS preflight, Kilo + Claude Code presets, model config generation)
-- `up` - start/reconcile stack and wait for health
+- `up` - start the stack with what's already configured, wait for health
 - `down` - stop stack
-- `auth` - refresh AWS sessions and restart services (no model-config regeneration)
+- `restart` - stop and restart all services without pulling or regenerating config
+- `update` - regenerate litellm config, pull latest images, restart stack
+- `reset` - force-remove containers, regen config, pull images, restart (nuclear restart, keeps `.env`)
+- `auth` - refresh AWS sessions and restart services
 - `doctor` - diagnostics (containers, health, models, client preset checks, AWS session status)
-- `test` - full end-to-end smoke tests (`scripts/cli/test.sh`)
-- `update` - pull/restart images
 - `stats` - savings/cost/cache report
+- `test` - full end-to-end smoke tests (`scripts/cli/test.sh`)
 - `config regen` - regenerate `litellm_config.yaml` explicitly
 - `config setup [kilo|claude|all]` - write client presets (Kilo and/or Claude Code)
-- `reset` - remove stack and optional local state
+- `cleanup <data|images|kilo|claude|all>` - remove specific local state or client configs
+- `uninstall` - stop services, remove all data/images/configs, remove headway itself
+- `completion [bash|zsh|fish|auto]` - print shell tab-completion script (auto-detects shell if omitted)
 - `secret-scan` - run local secret scan
 
 ## Supported Systems
@@ -152,7 +156,7 @@ Bedrock native lane savings (enabled by default):
   - optional auto-placement of `cache_control` markers (`HEADWAY_BEDROCK_AUTO_CACHE_CONTROL=1`)
 - Bedrock-native savings metrics (input/output tokens, compression %, and USD) are exposed at `/bedrock-native/stats` and rolled into unified `./headway stats` output and the dashboard.
 
-USD savings are estimated from a local pricing snapshot of [models.dev](https://models.dev/api.json), refreshed by `./headway up` and `./headway update` into `.data/headroom/models-dev.json` (gitignored). If the snapshot is missing (e.g. first run while offline), token savings still display but USD figures are omitted rather than guessed.
+USD savings are estimated from a local pricing snapshot of [models.dev](https://models.dev/api.json), refreshed by `headway update` into `.data/headroom/models-dev.json` (gitignored). If the snapshot is missing (e.g. first run while offline), token savings still display but USD figures are omitted rather than guessed.
 
 ## Configuration Examples
 
@@ -265,9 +269,20 @@ Repository trust docs:
 
 ## Uninstall and Cleanup
 
+Remove specific local state:
+
 ```bash
-./headway reset --yes
-./headway reset --yes --purge-data --prune-images --cleanup-kilo
+headway cleanup data        # delete runtime data (.data/)
+headway cleanup images      # remove Docker images
+headway cleanup kilo        # remove Kilo provider preset
+headway cleanup claude      # remove Claude Code preset
+headway cleanup all --yes   # remove all of the above
+```
+
+Full uninstall (removes headway itself):
+
+```bash
+headway uninstall --yes
 ```
 
 ## Credits

@@ -21,11 +21,39 @@ BEDROCK_URL="http://127.0.0.1:4002"
 LITELLM_ADMIN_URL="http://127.0.0.1:4001"
 
 load_env() {
+  # Unset all headway-managed vars so they can only come from .env, never
+  # silently inherited from the outer shell environment.
+  unset AWS_PROFILE AWS_REGION BEDROCK_AWS_PROFILE BEDROCK_DISCOVERY_AWS_PROFILE \
+    HEADROOM_BEDROCK_IMAGE HEADROOM_COMPRESS_USER_MESSAGES HEADROOM_MIN_TOKENS \
+    HEADROOM_PROTECT_RECENT HEADWAY_BEDROCK_AUTO_CACHE_CONTROL
   if [[ -f "$ENV_FILE" ]]; then
     set -o allexport
     # shellcheck source=/dev/null
     source "$ENV_FILE"
     set +o allexport
+  fi
+}
+
+require_env() {
+  if [[ ! -f "$ENV_FILE" ]]; then
+    echo "ERROR: .env not found at $ENV_FILE"
+    echo "       Run 'headway init' to set up headway first"
+    exit 1
+  fi
+  if [[ -z "${AWS_PROFILE:-}" ]]; then
+    echo "ERROR: AWS_PROFILE is not set in $ENV_FILE"
+    echo "       Run 'headway init' or pass --aws-profile"
+    exit 1
+  fi
+  if [[ -z "${AWS_REGION:-}" ]]; then
+    echo "ERROR: AWS_REGION is not set in $ENV_FILE"
+    echo "       Run 'headway init' to configure"
+    exit 1
+  fi
+  if [[ -z "${BEDROCK_AWS_PROFILE:-}" ]]; then
+    echo "ERROR: BEDROCK_AWS_PROFILE is not set in $ENV_FILE"
+    echo "       Run 'headway init' to configure"
+    exit 1
   fi
 }
 
@@ -369,7 +397,7 @@ check_copilot_auth_hint() {
     echo "WARNING: Copilot device auth is still pending. Complete it before running tests:"
     echo "  $code_line"
     echo "  Open: https://github.com/login/device"
-    echo "  Then run: ./headway auth"
+    echo "  Then run: headway auth"
     return 1
   fi
   return 0
@@ -408,15 +436,12 @@ cmd_init() {
   run_init_questionnaire_if_needed "$aws_profile_override"
   ensure_env_defaults "$aws_profile_override"
   load_env
+  require_env
 
-  local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
-  if [[ -z "$aws_profile_name" ]]; then
-    echo "ERROR: AWS_PROFILE is required; set it in $ENV_FILE"
-    exit 1
-  fi
+  local aws_profile_name="$AWS_PROFILE"
   local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
-  local discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-${BEDROCK_AWS_PROFILE:-$aws_profile_name}}"
-  local aws_region="${AWS_REGION:-$DEFAULT_AWS_REGION}"
+  local discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-$bedrock_profile}"
+  local aws_region="$AWS_REGION"
 
   ensure_aws_session "$aws_profile_name" "$aws_region"
   ensure_aws_session "$bedrock_profile" "$aws_region"
@@ -429,6 +454,8 @@ cmd_init() {
     generate_config "$aws_profile_name" "$discovery_profile"
   fi
 
+  setup_shell_completion
+
   echo "init complete"
   echo "- AWS_PROFILE: $aws_profile_name"
   echo "- BEDROCK_AWS_PROFILE: $bedrock_profile"
@@ -438,7 +465,6 @@ cmd_init() {
 
 cmd_up() {
   local aws_profile_override=""
-  local regen_config="false"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -449,10 +475,6 @@ cmd_up() {
         fi
         aws_profile_override="$2"
         shift 2
-        ;;
-      --regen-config)
-        regen_config="true"
-        shift
         ;;
       *)
         echo "Unknown up arg: $1"
@@ -468,27 +490,16 @@ cmd_up() {
   load_env
   ensure_env_defaults "$aws_profile_override"
   load_env
+  require_env
   sync_headroom_tuning_env
 
-  local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
-  if [[ -z "$aws_profile_name" ]]; then
-    echo "ERROR: AWS_PROFILE is required; set it in $ENV_FILE"
-    exit 1
-  fi
+  local aws_profile_name="$AWS_PROFILE"
   local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
-  local discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-${BEDROCK_AWS_PROFILE:-$aws_profile_name}}"
-  local aws_region="${AWS_REGION:-$DEFAULT_AWS_REGION}"
+  local aws_region="$AWS_REGION"
 
   ensure_aws_session "$aws_profile_name" "$aws_region"
   ensure_aws_session "$bedrock_profile" "$aws_region"
 
-  if [[ "$regen_config" == "true" || ! -s "$ROOT_DIR/litellm_config.yaml" ]]; then
-    ensure_aws_session "$discovery_profile" "$aws_region"
-    generate_config "$aws_profile_name" "$discovery_profile"
-  fi
-
-  sync_pricing
-  compose_pull
   docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
 
   if ! wait_for_http "$GATEWAY_URL/livez" 30 2 >/dev/null; then
@@ -504,47 +515,24 @@ cmd_up() {
   echo "gateway is up"
 }
 
-cmd_down() {
-  require_docker
-  docker compose -f "$COMPOSE_FILE" down
-  echo "gateway is down"
-}
-
 cmd_update() {
-  local regen_config="false"
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --regen-config)
-        regen_config="true"
-        shift
-        ;;
-      *)
-        echo "Unknown update arg: $1"
-        exit 1
-        ;;
-    esac
-  done
-
   require_cmd aws
   require_cmd python3
   require_docker
+
   load_env
-  ensure_env_defaults ""
-  load_env
+  require_env
   sync_headroom_tuning_env
 
-  local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
-  if [[ -z "$aws_profile_name" ]]; then
-    echo "ERROR: AWS_PROFILE is required; set it in $ENV_FILE"
-    exit 1
-  fi
-  local discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-${BEDROCK_AWS_PROFILE:-$aws_profile_name}}"
-  local aws_region="${AWS_REGION:-$DEFAULT_AWS_REGION}"
+  local aws_profile_name="$AWS_PROFILE"
+  local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
+  local discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-$bedrock_profile}"
+  local aws_region="$AWS_REGION"
 
-  if [[ "$regen_config" == "true" ]]; then
-    ensure_aws_session "$discovery_profile" "$aws_region"
-    generate_config "$aws_profile_name" "$discovery_profile"
-  fi
+  ensure_aws_session "$aws_profile_name" "$aws_region"
+  ensure_aws_session "$bedrock_profile" "$aws_region"
+  ensure_aws_session "$discovery_profile" "$aws_region"
+  generate_config "$aws_profile_name" "$discovery_profile"
 
   sync_pricing
   compose_pull
@@ -562,23 +550,46 @@ cmd_update() {
   echo "update complete"
 }
 
+cmd_restart() {
+  require_docker
+  load_env
+  require_env
+  sync_headroom_tuning_env
+
+  docker compose -f "$COMPOSE_FILE" down
+  docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
+
+  if ! wait_for_http "$GATEWAY_URL/livez" 30 2 >/dev/null; then
+    echo "ERROR: gateway did not become healthy at $GATEWAY_URL/livez"
+    exit 1
+  fi
+  if ! wait_for_http "$BEDROCK_URL/livez" 30 2 >/dev/null; then
+    echo "ERROR: bedrock lane did not become healthy at $BEDROCK_URL/livez"
+    exit 1
+  fi
+
+  print_device_hint
+  echo "restarted"
+}
+
+cmd_down() {
+  require_docker
+  docker compose -f "$COMPOSE_FILE" down
+  echo "gateway is down"
+}
+
 cmd_auth() {
   require_cmd aws
   require_cmd python3
   require_docker
 
   load_env
-  ensure_env_defaults ""
-  load_env
+  require_env
   sync_headroom_tuning_env
 
-  local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
-  if [[ -z "$aws_profile_name" ]]; then
-    echo "ERROR: AWS_PROFILE is required; set it in $ENV_FILE"
-    exit 1
-  fi
+  local aws_profile_name="$AWS_PROFILE"
   local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
-  local aws_region="${AWS_REGION:-$DEFAULT_AWS_REGION}"
+  local aws_region="$AWS_REGION"
 
   ensure_aws_session "$aws_profile_name" "$aws_region"
   ensure_aws_session "$bedrock_profile" "$aws_region"
@@ -607,6 +618,7 @@ cmd_doctor() {
   require_cmd python3
   require_docker
   load_env
+  require_env
   sync_headroom_tuning_env
 
   echo "=== headway doctor ==="
@@ -642,32 +654,28 @@ cmd_doctor() {
   fi
   echo
 
-  local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
-  if [[ -z "$aws_profile_name" ]]; then
-    echo "ERROR: AWS_PROFILE is required; set it in $ENV_FILE"
-    exit 1
-  fi
+  local aws_profile_name="$AWS_PROFILE"
   local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
-  local aws_region="${AWS_REGION:-$DEFAULT_AWS_REGION}"
+  local aws_region="$AWS_REGION"
 
   echo "[client config]"
   if [[ -f "$KILO_CONF" ]]; then
     if python3 "$PY_HELPER" kilo-check "$KILO_CONF" >/dev/null 2>&1; then
       echo "kilo: baseURL settings are aligned"
     else
-      echo "kilo: baseURL settings mismatch; run: ./headway config setup kilo"
+      echo "kilo: baseURL settings mismatch; run: headway config setup kilo"
     fi
   else
-    echo "kilo: missing $KILO_CONF; run: ./headway config setup kilo"
+    echo "kilo: missing $KILO_CONF; run: headway config setup kilo"
   fi
   if [[ -f "$CLAUDE_CODE_SETTINGS" ]]; then
     if python3 "$PY_HELPER" claude-check "$CLAUDE_CODE_SETTINGS" "$bedrock_profile" "$aws_region" >/dev/null 2>&1; then
       echo "claude code: bedrock env settings are aligned"
     else
-      echo "claude code: settings mismatch; run: ./headway config setup claude"
+      echo "claude code: settings mismatch; run: headway config setup claude"
     fi
   else
-    echo "claude code: missing $CLAUDE_CODE_SETTINGS; run: ./headway config setup claude"
+    echo "claude code: missing $CLAUDE_CODE_SETTINGS; run: headway config setup claude"
   fi
   echo
 
@@ -707,7 +715,7 @@ cmd_stats() {
 
 cmd_config() {
   if [[ $# -lt 1 ]]; then
-    echo "Usage: ./headway config <regen|setup|show>"
+    echo "Usage: headway config <regen|setup|show>"
     exit 1
   fi
 
@@ -718,16 +726,11 @@ cmd_config() {
       require_cmd aws
       require_cmd python3
       load_env
-      ensure_env_defaults ""
-      load_env
+      require_env
       sync_headroom_tuning_env
-      local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
-      if [[ -z "$aws_profile_name" ]]; then
-        echo "ERROR: AWS_PROFILE is required; set it in $ENV_FILE"
-        exit 1
-      fi
+      local aws_profile_name="$AWS_PROFILE"
       local discovery_profile=""
-      local region="${AWS_REGION:-$DEFAULT_AWS_REGION}"
+      local region="$AWS_REGION"
 
       while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -776,15 +779,10 @@ cmd_config() {
       done
 
       load_env
-      ensure_env_defaults ""
-      load_env
-      local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
-      if [[ -z "$aws_profile_name" ]]; then
-        echo "ERROR: AWS_PROFILE is required; set it in $ENV_FILE"
-        exit 1
-      fi
+      require_env
+      local aws_profile_name="$AWS_PROFILE"
       local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
-      local region="${AWS_REGION:-$DEFAULT_AWS_REGION}"
+      local region="$AWS_REGION"
 
       if [[ "$target" == "all" || "$target" == "kilo" ]]; then
         setup_kilo_config
@@ -795,13 +793,12 @@ cmd_config() {
         echo "claude code config updated"
       fi
       ;;
-    kilo)
-      setup_kilo_config
-      echo "kilo config updated"
-      ;;
     show)
       load_env
       echo "ENV file: $ENV_FILE"
+      if [[ ! -f "$ENV_FILE" ]]; then
+        echo "WARNING: .env file not found — values below are from shell environment"
+      fi
       echo "AWS_PROFILE=${AWS_PROFILE:-<unset>}"
       echo "BEDROCK_AWS_PROFILE=${BEDROCK_AWS_PROFILE:-<unset>}"
       echo "BEDROCK_DISCOVERY_AWS_PROFILE=${BEDROCK_DISCOVERY_AWS_PROFILE:-<unset>}"
@@ -823,31 +820,10 @@ cmd_config() {
 
 cmd_reset() {
   local yes="false"
-  local purge_data="false"
-  local prune_images="false"
-  local cleanup_kilo="false"
-  local cleanup_claude="false"
-
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --yes)
         yes="true"
-        shift
-        ;;
-      --purge-data)
-        purge_data="true"
-        shift
-        ;;
-      --prune-images)
-        prune_images="true"
-        shift
-        ;;
-      --cleanup-kilo)
-        cleanup_kilo="true"
-        shift
-        ;;
-      --cleanup-claude)
-        cleanup_claude="true"
         shift
         ;;
       *)
@@ -858,8 +834,8 @@ cmd_reset() {
   done
 
   if [[ "$yes" != "true" ]]; then
-    echo "This will remove local gateway containers and .env."
-    echo "Flags: purge-data=$purge_data prune-images=$prune_images cleanup-kilo=$cleanup_kilo cleanup-claude=$cleanup_claude"
+    echo "This will force-remove all gateway containers and restart the stack."
+    echo "Your .env config is preserved. Use 'headway cleanup' to remove data or images."
     read -r -p "Proceed? (y/N): " ans
     if [[ ! "$ans" =~ ^[Yy]$ ]]; then
       echo "aborted"
@@ -867,32 +843,209 @@ cmd_reset() {
     fi
   fi
 
+  require_cmd python3
+  require_cmd aws
   require_docker
+
   docker compose -f "$COMPOSE_FILE" down --remove-orphans 2>/dev/null || true
   docker rm -f headroom-gateway litellm-gateway headroom-bedrock-gateway 2>/dev/null || true
-  rm -f "$ENV_FILE"
 
-  if [[ "$purge_data" == "true" ]]; then
-    rm -rf "$ROOT_DIR/.data"
+  load_env
+  require_env
+  sync_headroom_tuning_env
+
+  local aws_profile_name="$AWS_PROFILE"
+  local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
+  local discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-$bedrock_profile}"
+  local aws_region="$AWS_REGION"
+
+  ensure_aws_session "$aws_profile_name" "$aws_region"
+  ensure_aws_session "$bedrock_profile" "$aws_region"
+  ensure_aws_session "$discovery_profile" "$aws_region"
+  generate_config "$aws_profile_name" "$discovery_profile"
+
+  sync_pricing
+  compose_pull
+  docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
+
+  if ! wait_for_http "$GATEWAY_URL/livez" 30 2 >/dev/null; then
+    echo "ERROR: gateway did not become healthy at $GATEWAY_URL/livez"
+    exit 1
+  fi
+  if ! wait_for_http "$BEDROCK_URL/livez" 30 2 >/dev/null; then
+    echo "ERROR: bedrock lane did not become healthy at $BEDROCK_URL/livez"
+    exit 1
   fi
 
-  if [[ "$prune_images" == "true" ]]; then
+  print_device_hint
+  echo "reset complete — gateway is back up"
+}
+
+cmd_cleanup() {
+  local target="${1:-}"
+  local yes="false"
+
+  # Allow --yes before or after the target
+  local args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --yes)
+        yes="true"
+        shift
+        ;;
+      data | images | kilo | claude | all)
+        target="$1"
+        shift
+        ;;
+      *)
+        echo "Unknown cleanup arg: $1"
+        echo "Usage: headway cleanup <data|images|kilo|claude|all> [--yes]"
+        exit 1
+        ;;
+    esac
+  done
+
+  if [[ -z "$target" ]]; then
+    echo "Usage: headway cleanup <data|images|kilo|claude|all> [--yes]"
+    echo
+    echo "  data    remove cached pricing and stats data (.data/)"
+    echo "  images  remove pulled Docker images"
+    echo "  kilo    remove Kilo client config"
+    echo "  claude  remove Claude Code client config"
+    echo "  all     all of the above"
+    exit 1
+  fi
+
+  local do_data="false" do_images="false" do_kilo="false" do_claude="false"
+  case "$target" in
+    data) do_data="true" ;;
+    images) do_images="true" ;;
+    kilo) do_kilo="true" ;;
+    claude) do_claude="true" ;;
+    all)
+      do_data="true"
+      do_images="true"
+      do_kilo="true"
+      do_claude="true"
+      ;;
+  esac
+
+  if [[ "$yes" != "true" ]]; then
+    echo "This will remove:"
+    [[ "$do_data" == "true" ]] && echo "  cached data (.data/)"
+    [[ "$do_images" == "true" ]] && echo "  pulled Docker images"
+    [[ "$do_kilo" == "true" ]] && echo "  Kilo client config"
+    [[ "$do_claude" == "true" ]] && echo "  Claude Code client config"
+    read -r -p "Proceed? (y/N): " ans
+    if [[ ! "$ans" =~ ^[Yy]$ ]]; then
+      echo "aborted"
+      exit 0
+    fi
+  fi
+
+  if [[ "$do_data" == "true" ]]; then
+    rm -rf "$ROOT_DIR/.data"
+    echo "removed .data/"
+  fi
+  if [[ "$do_images" == "true" ]]; then
     docker image rm ghcr.io/chopratejas/headroom:code 2>/dev/null || true
     docker image rm ghcr.io/berriai/litellm:main-stable 2>/dev/null || true
     docker image rm ghcr.io/ysheikh2/headway:bedrock-native 2>/dev/null || true
     docker image rm ghcr.io/ysheikh2/headway:bedrock-native-latest 2>/dev/null || true
+    echo "removed Docker images"
   fi
-
-  if [[ "$cleanup_kilo" == "true" ]]; then
+  if [[ "$do_kilo" == "true" ]]; then
     cleanup_kilo_config
+    echo "removed Kilo config"
   fi
-
-  if [[ "$cleanup_claude" == "true" ]]; then
+  if [[ "$do_claude" == "true" ]]; then
     cleanup_claude_config
+    echo "removed Claude Code client config"
+  fi
+  echo "cleanup complete"
+}
+
+cmd_uninstall() {
+  local yes="false"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --yes)
+        yes="true"
+        shift
+        ;;
+      *)
+        echo "Unknown uninstall arg: $1"
+        exit 1
+        ;;
+    esac
+  done
+
+  if [[ "$yes" != "true" ]]; then
+    echo "This will completely remove headway from your system:"
+    echo "  - Stop and remove gateway containers"
+    echo "  - Remove pulled Docker images and cached data"
+    echo "  - Remove Kilo and Claude Code client configs"
+    echo "  - Remove the ~/.local/bin/headway symlink"
+    echo "  - Remove tab completion from your shell rc file"
+    echo "  - Delete the headway directory ($ROOT_DIR)"
+    echo
+    read -r -p "Uninstall headway? (y/N): " ans
+    if [[ ! "$ans" =~ ^[Yy]$ ]]; then
+      echo "aborted"
+      exit 0
+    fi
   fi
 
-  echo "reset complete — services are stopped"
-  echo "  → Run './headway up' to restart (includes AWS auth refresh)."
+  # Stop services and wipe all state
+  if docker info >/dev/null 2>&1; then
+    docker compose -f "$COMPOSE_FILE" down --remove-orphans 2>/dev/null || true
+    docker rm -f headroom-gateway litellm-gateway headroom-bedrock-gateway 2>/dev/null || true
+    docker image rm ghcr.io/chopratejas/headroom:code 2>/dev/null || true
+    docker image rm ghcr.io/berriai/litellm:main-stable 2>/dev/null || true
+    docker image rm ghcr.io/ysheikh2/headway:bedrock-native 2>/dev/null || true
+    docker image rm ghcr.io/ysheikh2/headway:bedrock-native-latest 2>/dev/null || true
+    echo "stopped containers and removed images"
+  fi
+  rm -f "$ENV_FILE"
+  rm -rf "$ROOT_DIR/.data"
+  cleanup_kilo_config 2>/dev/null || true
+  cleanup_claude_config 2>/dev/null || true
+  echo "removed config and cached data"
+
+  # Remove symlink
+  local symlink="$HOME/.local/bin/headway"
+  if [[ -L "$symlink" ]]; then
+    rm -f "$symlink"
+    echo "removed $symlink"
+  fi
+
+  # Strip completion lines from shell rc
+  local shell_name
+  shell_name="$(basename "${SHELL:-}")"
+  local rc_file=""
+  case "$shell_name" in
+    zsh) rc_file="$HOME/.zshrc" ;;
+    bash) rc_file="$HOME/.bashrc" ;;
+  esac
+  if [[ -n "$rc_file" && -f "$rc_file" ]] && grep -qF "headway completion" "$rc_file" 2>/dev/null; then
+    local tmp
+    tmp="$(mktemp)"
+    grep -vF "headway completion" "$rc_file" >"$tmp" || true
+    mv "$tmp" "$rc_file"
+    echo "removed completion lines from $rc_file"
+  fi
+  # Fish: remove completion file
+  local fish_target="$HOME/.config/fish/completions/headway.fish"
+  if [[ -f "$fish_target" ]]; then
+    rm -f "$fish_target"
+    echo "removed $fish_target"
+  fi
+
+  # Delete repo dir last — bash keeps running in memory after the file is gone
+  echo "removing $ROOT_DIR ..."
+  rm -rf "$ROOT_DIR"
+  echo "headway uninstalled"
 }
 
 cmd_test() {
@@ -901,17 +1054,16 @@ cmd_test() {
   require_docker
 
   load_env
-  ensure_env_defaults ""
-  load_env
+  require_env
 
-  local aws_profile_name="${AWS_PROFILE:-$DEFAULT_AWS_PROFILE}"
+  local aws_profile_name="$AWS_PROFILE"
   local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
-  local aws_region="${AWS_REGION:-$DEFAULT_AWS_REGION}"
+  local aws_region="$AWS_REGION"
 
   if ! AWS_REGION="$aws_region" AWS_DEFAULT_REGION="$aws_region" \
     aws sts get-caller-identity --profile "$bedrock_profile" >/dev/null 2>&1; then
     echo "ERROR: AWS credentials expired for profile '$bedrock_profile'."
-    echo "       Fix: ./headway auth"
+    echo "       Fix: headway auth"
     exit 1
   fi
 
@@ -924,46 +1076,198 @@ cmd_secret_scan() {
   exec bash "$ROOT_DIR/scripts/cli/secret-scan.sh" "$@"
 }
 
+setup_shell_completion() {
+  local shell_name
+  shell_name="$(basename "${SHELL:-}")"
+
+  local rc_file eval_line
+
+  case "$shell_name" in
+    zsh)
+      rc_file="$HOME/.zshrc"
+      eval_line="eval \"\$(\"$ROOT_DIR/headway\" completion zsh)\"  # headway tab completion"
+      ;;
+    bash)
+      rc_file="$HOME/.bashrc"
+      eval_line="eval \"\$(\"$ROOT_DIR/headway\" completion bash)\"  # headway tab completion"
+      ;;
+    fish)
+      local fish_completions_dir="$HOME/.config/fish/completions"
+      local fish_target="$fish_completions_dir/headway.fish"
+      if [[ -f "$fish_target" ]]; then
+        echo "- completion: fish completions already installed at $fish_target (skipped)"
+        return 0
+      fi
+      if [[ ! -t 0 ]]; then
+        return 0
+      fi
+      read -r -p "Install fish tab completions to $fish_target? (y/N): " ans
+      if [[ "$ans" =~ ^[Yy]$ ]]; then
+        mkdir -p "$fish_completions_dir"
+        bash "$ROOT_DIR/headway" completion fish >"$fish_target"
+        echo "- completion: fish completions installed — restart your shell"
+      else
+        echo "- completion: skipped (run 'headway completion fish > $fish_target' later)"
+      fi
+      return 0
+      ;;
+    *)
+      echo "- completion: unsupported shell '$shell_name' — run 'headway completion bash|zsh|fish' manually"
+      return 0
+      ;;
+  esac
+
+  # Idempotency: skip if the eval line (or anything referencing headway completion) is already present.
+  if grep -qF "headway completion" "$rc_file" 2>/dev/null; then
+    echo "- completion: already configured in $rc_file (skipped)"
+    return 0
+  fi
+
+  if [[ ! -t 0 ]]; then
+    return 0
+  fi
+
+  read -r -p "Add tab completion to $rc_file? (y/N): " ans
+  if [[ "$ans" =~ ^[Yy]$ ]]; then
+    printf '\n%s\n' "$eval_line" >>"$rc_file"
+    echo "- completion: added to $rc_file — run 'source $rc_file' or open a new shell"
+  else
+    echo "- completion: skipped (add manually: $eval_line)"
+  fi
+}
+
+cmd_completion() {
+  local shell="${1:-}"
+  if [[ -z "$shell" || "$shell" == "auto" ]]; then
+    shell="$(basename "${SHELL:-bash}")"
+    # fish can't use eval "$(cmd)" — it needs the file written directly
+    if [[ "$shell" == "fish" ]]; then
+      echo "# fish detected — write this to ~/.config/fish/completions/headway.fish" >&2
+    fi
+  fi
+  local completion_script="$ROOT_DIR/scripts/cli/headway-completion.bash"
+
+  case "$shell" in
+    bash)
+      cat "$completion_script"
+      ;;
+    zsh)
+      cat <<'ZSHEOF'
+# headway zsh completion — wraps the bash completion via bashcompinit.
+autoload -Uz bashcompinit 2>/dev/null && bashcompinit 2>/dev/null
+ZSHEOF
+      cat "$completion_script"
+      ;;
+    fish)
+      cat <<'FISHEOF'
+# headway fish completion
+
+set -l _hw_cmds up down restart reset auth init config doctor stats test cleanup uninstall secret-scan completion help
+
+complete -c headway -f -n '__fish_use_subcommand' -a "$_hw_cmds"
+
+# up
+complete -c headway -n '__fish_seen_subcommand_from up' -l aws-profile -d 'AWS profile name'
+
+# init
+complete -c headway -n '__fish_seen_subcommand_from init' -l aws-profile -d 'AWS profile name'
+complete -c headway -n '__fish_seen_subcommand_from init' -l skip-config -d 'Skip Kilo/Claude config generation'
+
+# config subcommands
+complete -c headway -n '__fish_seen_subcommand_from config' -a 'show regen setup'
+complete -c headway -n '__fish_seen_subcommand_from config; and __fish_seen_subcommand_from regen' -l aws-profile -d 'AWS profile name'
+complete -c headway -n '__fish_seen_subcommand_from config; and __fish_seen_subcommand_from regen' -l bedrock-discovery-aws-profile -d 'Bedrock discovery profile'
+complete -c headway -n '__fish_seen_subcommand_from config; and __fish_seen_subcommand_from setup' -a 'kilo claude all'
+
+# cleanup
+complete -c headway -n '__fish_seen_subcommand_from cleanup' -a 'data images kilo claude all'
+complete -c headway -n '__fish_seen_subcommand_from cleanup' -l yes -d 'Skip confirmation prompt'
+
+# reset / uninstall
+complete -c headway -n '__fish_seen_subcommand_from reset' -l yes -d 'Skip confirmation prompt'
+complete -c headway -n '__fish_seen_subcommand_from uninstall' -l yes -d 'Skip confirmation prompt'
+
+# completion
+complete -c headway -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish auto'
+FISHEOF
+      ;;
+    *)
+      echo "Unknown shell: $shell. Supported: bash, zsh, fish" >&2
+      exit 1
+      ;;
+  esac
+}
+
 print_help() {
   cat <<'EOF'
-Usage: ./headway <command> [args]
+Usage: headway <command> [options]
 
-Commands:
-  init [--aws-profile <name>] [--skip-config]
-      First-time setup (.env defaults, AWS preflight, Kilo + Claude Code config, model config generation)
-
-  up [--aws-profile <name>] [--regen-config]
-      Start/reconcile stack and wait for healthy lanes
+LIFECYCLE
+  up [--aws-profile <name>]
+      Start the stack with current config — no image pull, no config regen
 
   down
-      Stop stack
+      Stop the gateway stack
+
+  update
+      Regenerate litellm config, pull latest images, restart
+
+  restart
+      Quick stop and start, no image pull, no config regen
+
+  reset [--yes]
+      Hard restart: force-remove containers, regen config, pull images, start fresh
+      (.env is preserved — use 'headway cleanup' to remove data or images separately)
 
   auth
-      Refresh AWS sessions and restart services without regenerating litellm_config.yaml
+      Refresh AWS sessions and restart services
 
+SETUP & CONFIGURATION
+  init [--aws-profile <name>] [--skip-config]
+      First-time setup: .env, AWS preflight, Kilo + Claude Code config,
+      model config generation, and shell tab completion
+
+  config show
+      Show active environment settings
+
+  config regen [--aws-profile <name>] [--bedrock-discovery-aws-profile <name>]
+      Regenerate litellm_config.yaml
+
+  config setup [kilo|claude|all]
+      Write client configs (default: all)
+
+DIAGNOSTICS
   doctor
       Health and configuration diagnostics
 
-  test
-      Run full end-to-end smoke test suite (scripts/cli/test.sh)
-
-  update [--regen-config]
-      Pull images and restart stack
-
   stats
-      Print savings and usage report
+      Usage and cost savings report
 
-  config <regen|setup|show>
-      regen: regenerate litellm_config.yaml
-        options: [--aws-profile <name>] [--bedrock-discovery-aws-profile <name>]
-      setup [kilo|claude|all]: write client config
-      show:  show active env settings
+  test [...]
+      Run the end-to-end test suite
+
+MAINTENANCE
+  cleanup <data|images|kilo|claude|all> [--yes]
+      Remove optional state selectively:
+        data    cached pricing and stats (.data/)
+        images  pulled Docker images
+        kilo    Kilo client config
+        claude  Claude Code client config
+        all     everything above
+
+INSTALL
+  uninstall [--yes]
+      Remove headway entirely: containers, images, data, client configs,
+      shell completion, PATH symlink, and the headway directory
 
   secret-scan
       Run local secret scan
 
-  reset [--yes] [--purge-data] [--prune-images] [--cleanup-kilo] [--cleanup-claude]
-      Remove stack and optional local state
+  completion [bash|zsh|fish|auto]
+      Print shell completion script (auto-detects shell if omitted)
+        eval "$(headway completion)"       # → auto-detected, add to rc file
+        eval "$(headway completion bash)"  # → explicit bash
+        headway completion fish > ~/.config/fish/completions/headway.fish
 
   help
       Show this message
@@ -988,6 +1292,15 @@ main() {
     down)
       cmd_down "$@"
       ;;
+    restart)
+      cmd_restart "$@"
+      ;;
+    update)
+      cmd_update "$@"
+      ;;
+    reset)
+      cmd_reset "$@"
+      ;;
     auth)
       cmd_auth "$@"
       ;;
@@ -996,9 +1309,6 @@ main() {
       ;;
     test)
       cmd_test "$@"
-      ;;
-    update)
-      cmd_update "$@"
       ;;
     stats)
       cmd_stats "$@"
@@ -1009,8 +1319,14 @@ main() {
     secret-scan)
       cmd_secret_scan "$@"
       ;;
-    reset)
-      cmd_reset "$@"
+    cleanup)
+      cmd_cleanup "$@"
+      ;;
+    uninstall)
+      cmd_uninstall "$@"
+      ;;
+    completion)
+      cmd_completion "$@"
       ;;
     help | -h | --help)
       print_help

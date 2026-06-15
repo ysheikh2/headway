@@ -18,7 +18,7 @@ services:
     ports:
       - "127.0.0.1:4001:4000"
     environment:
-      - AWS_PROFILE=${AWS_PROFILE:-default}
+      - AWS_PROFILE=${AWS_PROFILE:?AWS_PROFILE must be set — run 'headway init'}
       - AWS_CONFIG_FILE=/root/.aws/config
       - AWS_SHARED_CREDENTIALS_FILE=/root/.aws/credentials
       - GITHUB_COPILOT_TOKEN_DIR=/root/.config/litellm/github_copilot
@@ -90,20 +90,20 @@ services:
     expose:
       - "8787"
     environment:
-      - AWS_PROFILE=${BEDROCK_AWS_PROFILE:-default}
-      - AWS_REGION=${AWS_REGION:-eu-central-1}
-      - AWS_DEFAULT_REGION=${AWS_REGION:-eu-central-1}
-      - HEADROOM_PROXY_AWS_PROFILE=${BEDROCK_AWS_PROFILE:-default}
-      - HEADROOM_PROXY_BEDROCK_REGION=${AWS_REGION:-eu-central-1}
+      - AWS_PROFILE=${BEDROCK_AWS_PROFILE:?BEDROCK_AWS_PROFILE must be set — run 'headway init'}
+      - AWS_REGION=${AWS_REGION:?AWS_REGION must be set — run 'headway init'}
+      - AWS_DEFAULT_REGION=${AWS_REGION:?AWS_REGION must be set — run 'headway init'}
+      - HEADROOM_PROXY_AWS_PROFILE=${BEDROCK_AWS_PROFILE:?BEDROCK_AWS_PROFILE must be set — run 'headway init'}
+      - HEADROOM_PROXY_BEDROCK_REGION=${AWS_REGION:?AWS_REGION must be set — run 'headway init'}
     command:
       - "--listen"
       - "0.0.0.0:8787"
       - "--upstream"
-      - "https://bedrock-runtime.${AWS_REGION:-eu-central-1}.amazonaws.com"
+      - "https://bedrock-runtime.${AWS_REGION:?AWS_REGION must be set — run 'headway init'}.amazonaws.com"
       - "--aws-profile"
-      - "${BEDROCK_AWS_PROFILE:-default}"
+      - "${BEDROCK_AWS_PROFILE:?BEDROCK_AWS_PROFILE must be set — run 'headway init'}"
       - "--bedrock-region"
-      - "${AWS_REGION:-eu-central-1}"
+      - "${AWS_REGION:?AWS_REGION must be set — run 'headway init'}"
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8787/healthz"]
       interval: 30s
