@@ -520,6 +520,7 @@ wait_for_copilot_auth() {
   local timeout="${1:-600}"
   local elapsed=0
   local last_code=""
+  local litellm_exhausted="false"
 
   if ! copilot_auth_pending; then
     return 0
@@ -536,6 +537,22 @@ wait_for_copilot_auth() {
       echo "  Copilot auth complete."
       return 0
     fi
+
+    # LiteLLM only makes 3 device-code attempts (~60s each) before giving up.
+    # When exhausted, no new codes are issued and the token file is never written.
+    # Restart litellm to get a fresh set of codes so the user can keep trying.
+    if [[ "$litellm_exhausted" == "false" ]] && \
+       docker logs litellm-gateway 2>/dev/null | grep -q "Failed to get access token after 3 attempts"; then
+      litellm_exhausted="true"
+      echo
+      echo "  LiteLLM auth window expired — restarting to issue a fresh code..."
+      docker compose -f "$COMPOSE_FILE" restart litellm 2>/dev/null || true
+      sleep 8
+      last_code=""
+      litellm_exhausted="false"
+      continue
+    fi
+
     local code
     code=$(copilot_current_code)
     if [[ -n "$code" && "$code" != "$last_code" ]]; then
