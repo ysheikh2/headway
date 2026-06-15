@@ -162,10 +162,14 @@ else
   fail "completion bash failed via symlink"
 fi
 
-if "$SYMLINK" completion bash | grep -q "^#!"; then
-  fail "completion bash has shebang line"
+if _bash_compl="$("$SYMLINK" completion bash 2>&1)"; then
+  if echo "$_bash_compl" | grep -q "^#!"; then
+    fail "completion bash has shebang line"
+  else
+    ok "completion bash — no shebang"
+  fi
 else
-  ok "completion bash — no shebang"
+  fail "completion bash failed: $_bash_compl"
 fi
 
 if "$SYMLINK" completion zsh | grep -q "bashcompinit"; then
