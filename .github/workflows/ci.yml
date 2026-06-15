@@ -26,6 +26,8 @@ jobs:
       shell: ${{ steps.filter.outputs.shell }}
       python: ${{ steps.filter.outputs.python }}
       yaml: ${{ steps.filter.outputs.yaml }}
+      dashboard: ${{ steps.filter.outputs.dashboard }}
+      compat: ${{ steps.filter.outputs.compat }}
       relevant: ${{ steps.filter.outputs.relevant }}
 
     steps:
