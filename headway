@@ -3,14 +3,14 @@
 
 set -euo pipefail
 
-# Resolve symlink so ROOT_DIR points at the real repo, not the symlink's parent dir.
+# Resolve symlink chain so ROOT_DIR points at the real repo, not an intermediate link.
 _self="${BASH_SOURCE[0]}"
-if [[ -L "$_self" ]]; then
+while [[ -L "$_self" ]]; do
   _link="$(readlink "$_self")"
   [[ "$_link" == /* ]] || _link="$(dirname "$_self")/$_link"
   _self="$_link"
   unset _link
-fi
+done
 ROOT_DIR="$(cd "$(dirname "$_self")" && pwd)"
 unset _self
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
@@ -520,7 +520,8 @@ wait_for_copilot_auth() {
   local timeout="${1:-600}"
   local elapsed=0
   local last_code=""
-  local litellm_exhausted="false"
+  local logs_since
+  logs_since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
   if ! copilot_auth_pending; then
     return 0
@@ -540,16 +541,16 @@ wait_for_copilot_auth() {
 
     # LiteLLM only makes 3 device-code attempts (~60s each) before giving up.
     # When exhausted, no new codes are issued and the token file is never written.
-    # Restart litellm to get a fresh set of codes so the user can keep trying.
-    if [[ "$litellm_exhausted" == "false" ]] &&
-      docker logs litellm-gateway 2>/dev/null | grep -q "Failed to get access token after 3 attempts"; then
-      litellm_exhausted="true"
+    # Use --since to check only logs after the last restart so stale entries
+    # from a prior exhaustion don't trigger an immediate second restart.
+    if docker logs litellm-gateway --since "$logs_since" 2>/dev/null |
+      grep -q "Failed to get access token after 3 attempts"; then
       echo
       echo "  LiteLLM auth window expired — restarting to issue a fresh code..."
       docker compose -f "$COMPOSE_FILE" restart litellm 2>/dev/null || true
+      logs_since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
       sleep 8
       last_code=""
-      litellm_exhausted="false"
       continue
     fi
 
@@ -902,6 +903,13 @@ cmd_auth() {
     # litellm not running or token missing: start/restart litellm fresh
     docker rm -f litellm-gateway headroom-gateway 2>/dev/null || true
     docker compose -f "$COMPOSE_FILE" up -d litellm
+    wait_for_copilot_auth 600 || exit 1
+  elif copilot_token_expired_in_logs; then
+    # Token file exists but litellm reports it as expired — wipe and re-auth.
+    echo "Existing Copilot token has expired — re-authenticating..."
+    copilot_clear_token
+    docker compose -f "$COMPOSE_FILE" restart litellm 2>/dev/null || true
+    sleep 5
     wait_for_copilot_auth 600 || exit 1
   fi
 

@@ -49,8 +49,10 @@ for dp, dns, fns in os.walk(root):
             for m in pat.findall(line):
                 if m.lower().startswith(('http','bedrock-','github_copilot','eu-','global-')):
                     continue
-                # Skip URL path fragments and file paths (secrets don't contain /).
-                if '/' in m:
+                # Skip URL path fragments and file paths: they have multiple '/'
+                # separators (e.g. com/org/repo/main/file). Legitimate base64
+                # secrets may have at most one '/', so only skip 2+.
+                if m.count('/') >= 2:
                     continue
                 if m.startswith(('HEADROOM_GIT_REF=','HEADROOM_GIT_REPO=')):
                     continue

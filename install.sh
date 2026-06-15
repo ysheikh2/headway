@@ -119,17 +119,17 @@ do_install() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --dir)
-        [[ $# -ge 2 && "$2" != --* ]] || die "--dir requires a non-empty value"
+        [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || die "--dir requires a non-empty value"
         INSTALL_DIR="$2"
         shift 2
         ;;
       --branch)
-        [[ $# -ge 2 && "$2" != --* ]] || die "--branch requires a non-empty value"
+        [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || die "--branch requires a non-empty value"
         REPO_BRANCH="$2"
         shift 2
         ;;
       --symlink)
-        [[ $# -ge 2 && "$2" != --* ]] || die "--symlink requires a non-empty value"
+        [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || die "--symlink requires a non-empty value"
         SYMLINK="$2"
         shift 2
         ;;
