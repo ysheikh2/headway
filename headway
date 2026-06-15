@@ -62,11 +62,6 @@ require_env() {
     echo "       Run 'headway init' to configure"
     exit 1
   fi
-  if [[ -z "${BEDROCK_AWS_PROFILE:-}" ]]; then
-    echo "ERROR: BEDROCK_AWS_PROFILE is not set in $ENV_FILE"
-    echo "       Run 'headway init' to configure"
-    exit 1
-  fi
 }
 
 require_cmd() {
@@ -252,7 +247,9 @@ run_init_questionnaire_if_needed() {
   echo "Missing .env values detected. Running quick setup prompts (press Enter to accept defaults)."
 
   local aws_profile="$(get_env_key "AWS_PROFILE")"
-  while IFS= read -r key; do
+  # Use fd 3 for the key iterator so that read -r -p inside prompt_with_default
+  # keeps reading from stdin (the terminal) rather than from the key stream.
+  while IFS= read -r key <&3; do
     local current
     current="$(get_env_key "$key")"
     if [[ -n "$current" ]]; then
@@ -276,7 +273,7 @@ run_init_questionnaire_if_needed() {
     if [[ "$key" == "AWS_PROFILE" ]]; then
       aws_profile="$answer"
     fi
-  done < <(env_template_keys)
+  done 3< <(env_template_keys)
 }
 
 set_env_key() {

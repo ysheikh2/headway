@@ -3,7 +3,7 @@
 #
 # Covers:
 #   - completion output is syntactically valid bash with no shebang lines
-#   - require_env errors on missing .env / missing AWS_PROFILE / missing AWS_REGION / missing BEDROCK_AWS_PROFILE
+#   - require_env errors on missing .env / missing AWS_PROFILE / missing AWS_REGION
 #   - load_env: shell env cannot shadow .env values
 #   - load_env: shell env is unset when no .env exists
 #   - cleanup: invalid target is rejected
@@ -111,16 +111,17 @@ else
 fi
 rm -rf "$tmpdir"
 
-# ── 5. require_env: BEDROCK_AWS_PROFILE absent from .env ─────────────────────
+# ── 5. require_env: BEDROCK_AWS_PROFILE is optional (falls back to AWS_PROFILE) ─
 echo
-echo "[ Test 5: require_env — BEDROCK_AWS_PROFILE not in .env ]"
+echo "[ Test 5: require_env — BEDROCK_AWS_PROFILE optional (defaults to AWS_PROFILE) ]"
 tmpdir="$(make_isolated_copy)"
 printf 'AWS_PROFILE=test-profile\nAWS_REGION=us-east-1\n' >"$tmpdir/.env"
-out="$(BEDROCK_AWS_PROFILE= "$tmpdir/headway" config setup kilo 2>&1)" && status=0 || status=$?
-if [[ "$status" -ne 0 ]] && echo "$out" | grep -q "ERROR:.*BEDROCK_AWS_PROFILE"; then
-  ok "missing BEDROCK_AWS_PROFILE → exit $status with correct error"
+out="$(BEDROCK_AWS_PROFILE= "$tmpdir/headway" require_env 2>&1)" && status=0 || status=$?
+# require_env must NOT fail when BEDROCK_AWS_PROFILE is absent — it's optional
+if [[ "$out" != *"BEDROCK_AWS_PROFILE"* ]]; then
+  ok "BEDROCK_AWS_PROFILE absent → require_env does not error (optional field)"
 else
-  fail "missing BEDROCK_AWS_PROFILE → exit $status, output: $out"
+  fail "BEDROCK_AWS_PROFILE absent → require_env incorrectly errored: $out"
 fi
 rm -rf "$tmpdir"
 
