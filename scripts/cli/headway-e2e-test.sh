@@ -40,18 +40,22 @@ KEEP="${E2E_KEEP:-0}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --branch)
+      [[ $# -ge 2 && "$2" != --* ]] || die "--branch requires a value"
       REPO_BRANCH="$2"
       shift 2
       ;;
     --repo)
+      [[ $# -ge 2 && "$2" != --* ]] || die "--repo requires a value"
       REPO_URL="$2"
       shift 2
       ;;
     --aws-profile)
+      [[ $# -ge 2 && "$2" != --* ]] || die "--aws-profile requires a value"
       AWS_PROFILE="$2"
       shift 2
       ;;
     --region)
+      [[ $# -ge 2 && "$2" != --* ]] || die "--region requires a value"
       AWS_REGION="$2"
       shift 2
       ;;
@@ -244,16 +248,23 @@ section "6. headway up — start gateway stack"
 
 echo "  (pulling images and starting containers — may take 2–3 min on first run)"
 _UP_OK=true
-if "$SYMLINK" up 2>&1; then
+_up_out=""
+if _up_out="$("$SYMLINK" up 2>&1)"; then
   ok "headway up exited 0"
+  echo "$_up_out"
 else
-  # headway up exits non-zero when Copilot device auth is needed (expected in CI
-  # or on first install without a pre-existing Copilot token).  Don't count this
-  # as a hard FAIL — the remaining sections are skipped instead.
-  echo "  NOTE: headway up did not complete — Copilot device auth may be required."
-  echo "        Run interactively: $SYMLINK auth"
-  echo "  Skipping live-gateway sections (7–9)."
-  _UP_OK=false
+  echo "$_up_out"
+  # Distinguish expected Copilot device-auth requirement (no token file in CI)
+  # from real infrastructure failures (docker errors, AWS auth, config bugs).
+  if echo "$_up_out" | grep -qiE "copilot|device auth|github.com/login/device"; then
+    echo "  NOTE: headway up paused for Copilot device auth (expected in CI)."
+    echo "        Run interactively: $SYMLINK auth"
+    echo "  Skipping live-gateway sections (7–9)."
+    _UP_OK=false
+  else
+    fail "headway up failed (not a Copilot auth issue — see output above)"
+    _UP_OK=false
+  fi
 fi
 
 # ── 7. smoke tests ────────────────────────────────────────────────────────────
@@ -308,7 +319,7 @@ else
 fi
 
 # Verify containers stopped
-_running="$(docker ps --filter "name=litellm-gateway" --filter "name=headroom-gateway" -q 2>/dev/null || true)"
+_running="$(docker ps --filter "name=litellm-gateway" --filter "name=headroom-gateway" --filter "name=headroom-bedrock-gateway" -q 2>/dev/null || true)"
 if [[ -z "$_running" ]]; then
   ok "containers stopped (or never started)"
 else

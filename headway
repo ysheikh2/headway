@@ -841,10 +841,12 @@ cmd_auth() {
 
   local aws_profile_name="$AWS_PROFILE"
   local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
+  local discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-$bedrock_profile}"
   local aws_region="$AWS_REGION"
 
   ensure_aws_session "$aws_profile_name" "$aws_region"
   ensure_aws_session "$bedrock_profile" "$aws_region"
+  ensure_aws_session "$discovery_profile" "$aws_region"
 
   # If litellm is already running and auth is in progress, don't kill it —
   # restarting mid-flow loses the device session and forces a new code.
@@ -1624,6 +1626,10 @@ main() {
       ;;
     help | -h | --help)
       print_help
+      ;;
+    require_env)
+      load_env
+      require_env
       ;;
     *)
       echo "Unknown command: $cmd"

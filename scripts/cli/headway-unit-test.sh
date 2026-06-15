@@ -117,11 +117,12 @@ echo "[ Test 5: require_env — BEDROCK_AWS_PROFILE optional (defaults to AWS_PR
 tmpdir="$(make_isolated_copy)"
 printf 'AWS_PROFILE=test-profile\nAWS_REGION=us-east-1\n' >"$tmpdir/.env"
 out="$(BEDROCK_AWS_PROFILE= "$tmpdir/headway" require_env 2>&1)" && status=0 || status=$?
-# require_env must NOT fail when BEDROCK_AWS_PROFILE is absent — it's optional
-if [[ "$out" != *"BEDROCK_AWS_PROFILE"* ]]; then
-  ok "BEDROCK_AWS_PROFILE absent → require_env does not error (optional field)"
+# require_env must NOT fail when BEDROCK_AWS_PROFILE is absent — it's optional.
+# The require_env subcommand calls load_env then require_env internally.
+if [[ "$status" -eq 0 && "$out" != *"BEDROCK_AWS_PROFILE"* ]]; then
+  ok "BEDROCK_AWS_PROFILE absent → require_env exits 0 (optional field)"
 else
-  fail "BEDROCK_AWS_PROFILE absent → require_env incorrectly errored: $out"
+  fail "BEDROCK_AWS_PROFILE absent → require_env exit $status, output: $out"
 fi
 rm -rf "$tmpdir"
 

@@ -23,32 +23,6 @@ REPO_BRANCH="${HEADWAY_BRANCH:-}"
 INSTALL_DIR="${HEADWAY_INSTALL_DIR:-$HOME/headway}"
 SYMLINK="${HEADWAY_SYMLINK:-$HOME/.local/bin/headway}"
 
-# ── arg parsing ───────────────────────────────────────────────────────────────
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --dir)
-      INSTALL_DIR="$2"
-      shift 2
-      ;;
-    --branch)
-      REPO_BRANCH="$2"
-      shift 2
-      ;;
-    --symlink)
-      SYMLINK="$2"
-      shift 2
-      ;;
-    --help | -h)
-      echo "Usage: bash install.sh [--dir <path>] [--branch <name>] [--symlink <path>]"
-      exit 0
-      ;;
-    *)
-      echo "Unknown option: $1" >&2
-      exit 1
-      ;;
-  esac
-done
-
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 info() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
@@ -140,6 +114,36 @@ add_completion_to_rc() {
 # ── install ───────────────────────────────────────────────────────────────────
 
 do_install() {
+  # ── arg parsing ─────────────────────────────────────────────────────────────
+  # Runs only when the script is directly executed (not sourced by unit tests).
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dir)
+        [[ $# -ge 2 && "$2" != --* ]] || die "--dir requires a non-empty value"
+        INSTALL_DIR="$2"
+        shift 2
+        ;;
+      --branch)
+        [[ $# -ge 2 && "$2" != --* ]] || die "--branch requires a non-empty value"
+        REPO_BRANCH="$2"
+        shift 2
+        ;;
+      --symlink)
+        [[ $# -ge 2 && "$2" != --* ]] || die "--symlink requires a non-empty value"
+        SYMLINK="$2"
+        shift 2
+        ;;
+      --help | -h)
+        echo "Usage: bash install.sh [--dir <path>] [--branch <name>] [--symlink <path>]"
+        return 0
+        ;;
+      *)
+        echo "Unknown option: $1" >&2
+        exit 1
+        ;;
+    esac
+  done
+
   info "Checking prerequisites..."
   check_prereqs
 

@@ -18,7 +18,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/ysheikh2/headway/main/instal
 
 This clones headway to `~/headway`, creates a `headway` symlink at `~/.local/bin/headway`, wires up shell tab-completion, and walks you through `headway init` and `headway up` interactively.
 
-> **Note:** The `bash <(curl ...)` process-substitution form keeps your terminal attached so the guided setup prompts work. The traditional `curl | bash` pipe form installs without the guided flow (you'd run `headway init && headway up` manually afterwards).
+> **Note:** The `bash <(curl ...)` process-substitution form keeps your terminal attached so the guided setup prompts work. The traditional `curl | bash` pipe form installs without the guided flow (you'd run `headway init && headway up` manually afterward).
 
 **Prerequisites:** `git`, `docker` (with Compose), `aws` CLI, `python3`.
 
