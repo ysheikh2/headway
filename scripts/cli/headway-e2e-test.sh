@@ -235,11 +235,14 @@ fi
 
 section "5. headway config show"
 
-_config_out="$("$SYMLINK" config show 2>&1)"
-if echo "$_config_out" | grep -q "AWS_PROFILE"; then
-  ok "config show includes AWS_PROFILE"
+if _config_out="$("$SYMLINK" config show 2>&1)"; then
+  if echo "$_config_out" | grep -q "AWS_PROFILE"; then
+    ok "config show includes AWS_PROFILE"
+  else
+    fail "config show output unexpected: $_config_out"
+  fi
 else
-  fail "config show output unexpected: $_config_out"
+  fail "config show failed: $_config_out"
 fi
 
 # ── 6. headway up ─────────────────────────────────────────────────────────────
@@ -285,13 +288,14 @@ section "8. headway stats"
 
 if [[ "$_UP_OK" == "false" ]]; then
   echo "  (skipped — gateway not running)"
-else
-  _stats_out="$("$SYMLINK" stats 2>&1)"
+elif _stats_out="$("$SYMLINK" stats 2>&1)"; then
   if echo "$_stats_out" | grep -qiE "requests|tokens|savings"; then
     ok "headway stats returned usage data"
   else
     fail "headway stats output unexpected: $_stats_out"
   fi
+else
+  fail "headway stats failed: $_stats_out"
 fi
 
 # ── 9. headway doctor ─────────────────────────────────────────────────────────

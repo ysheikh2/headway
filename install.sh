@@ -223,7 +223,7 @@ do_install() {
   elif [[ -n "$rc_file" ]]; then
     info "Configuring shell ($shell_name)..."
 
-    if ! echo "$PATH" | tr ':' '\n' | grep -qF "$bin_dir"; then
+    if ! echo "$PATH" | tr ':' '\n' | grep -qxF "$bin_dir"; then
       add_to_path_in_rc "$rc_file" "$bin_dir"
     fi
 
@@ -234,7 +234,7 @@ do_install() {
   fi
 
   # Warn if bin dir not in current PATH — user needs to reload their shell
-  if ! echo "$PATH" | tr ':' '\n' | grep -qF "$bin_dir"; then
+  if ! echo "$PATH" | tr ':' '\n' | grep -qxF "$bin_dir"; then
     echo
     warn "$bin_dir is not in your current PATH"
     warn "Open a new terminal (or source your rc file) before using 'headway'"

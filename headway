@@ -730,10 +730,12 @@ cmd_up() {
 
   local aws_profile_name="$AWS_PROFILE"
   local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
+  local discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-$bedrock_profile}"
   local aws_region="$AWS_REGION"
 
   ensure_aws_session "$aws_profile_name" "$aws_region"
   ensure_aws_session "$bedrock_profile" "$aws_region"
+  ensure_aws_session "$discovery_profile" "$aws_region"
 
   sync_pricing
 
@@ -741,8 +743,6 @@ cmd_up() {
   echo "--- Starting gateway containers ---"
   echo
   docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
-
-  local discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-${BEDROCK_AWS_PROFILE:-$aws_profile_name}}"
 
   # Fresh install (no token): guide user through device auth interactively.
   if copilot_auth_pending; then
@@ -832,13 +832,20 @@ cmd_update() {
 }
 
 cmd_restart() {
+  require_cmd aws
+  require_cmd python3
   require_docker
   load_env
   require_env
   sync_headroom_tuning_env
 
   local aws_profile_name="$AWS_PROFILE"
-  local discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-${BEDROCK_AWS_PROFILE:-$aws_profile_name}}"
+  local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
+  local discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-$bedrock_profile}"
+  local aws_region="$AWS_REGION"
+
+  ensure_aws_session "$aws_profile_name" "$aws_region"
+  ensure_aws_session "$discovery_profile" "$aws_region"
 
   docker compose -f "$COMPOSE_FILE" down
   docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
