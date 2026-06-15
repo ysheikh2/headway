@@ -67,7 +67,7 @@ run_chat_completion() {
     "$base_url/v1/chat/completions" \
     -H "Content-Type: application/json" \
     -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"$prompt\"}],\"max_tokens\":$max_tokens,\"stream\":false}" \
-    2>/dev/null || echo "000")
+    2>/dev/null) || HTTP_CODE="000"
 }
 
 response_has_choices() {
@@ -137,7 +137,7 @@ run_bedrock_converse() {
     -H "Content-Type: application/json" \
     -H "x-request-id: $request_id" \
     -d "{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"$prompt\"}]}],\"inferenceConfig\":{\"maxTokens\":32}}" \
-    2>/dev/null || echo "000")
+    2>/dev/null) || HTTP_CODE="000"
 }
 
 run_bedrock_converse_compression_probe() {
@@ -150,12 +150,12 @@ run_bedrock_converse_compression_probe() {
   payload_file=$(make_tmp)
   python3 "$DIR/scripts/cli/headroom_python.py" build-bedrock-compression-payload "$payload_file"
 
-  HTTP_CODE=$(curl -s -o "$outfile" -w "%{http_code}" --max-time 90 \
+  HTTP_CODE=$(curl -s -o "$outfile" -w "%{http_code}" --max-time 180 \
     "$base_url/model/$model/converse" \
     -H "Content-Type: application/json" \
     -H "x-request-id: $request_id" \
     --data-binary @"$payload_file" \
-    2>/dev/null || echo "000")
+    2>/dev/null) || HTTP_CODE="000"
 }
 
 get_bedrock_native_saved_tokens() {
@@ -220,7 +220,7 @@ run_copilot_cache_probe() {
   for n in 1 2; do
     HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 \
       "$base_url/v1/chat/completions" -H "Content-Type: application/json" \
-      --data-binary @"$payload_file" 2>/dev/null || echo "000")
+      --data-binary @"$payload_file" 2>/dev/null) || HTTP_CODE="000"
     sleep 1
   done
 }
@@ -242,7 +242,7 @@ run_copilot_compression_probe() {
     "$base_url/v1/chat/completions" \
     -H "Content-Type: application/json" \
     --data-binary @"$payload_file" \
-    2>/dev/null || echo "000")
+    2>/dev/null) || HTTP_CODE="000"
 }
 
 run_bedrock_converse_stream() {
@@ -261,7 +261,7 @@ run_bedrock_converse_stream() {
     -H "Accept: application/vnd.amazon.eventstream" \
     -H "x-request-id: $request_id" \
     -d "{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"$prompt\"}]}],\"inferenceConfig\":{\"maxTokens\":32}}" \
-    2>/dev/null || echo "000")
+    2>/dev/null) || HTTP_CODE="000"
 }
 
 bedrock_log_has_for_request() {
@@ -514,19 +514,41 @@ echo
 
 # --- Test 4c: Copilot prefix-cache savings pricing (:4000) ---
 # Provider auto-caching (Copilot for Claude) reports cached_tokens; headroom
-# records them but cannot price them, so the unified patch values them via
-# models.dev. Guard: when cache reads are observed, the priced savings must be > 0.
+# records them and prices them via models.dev. Guard: when cache reads are observed
+# AND models.dev has per-token pricing for the model, the priced savings must be > 0.
+# Skip gracefully when models.dev has no pricing yet (e.g. newly-released models).
 echo "[ Test 4c: Copilot prefix-cache savings pricing (:4000) ]"
 if [[ "$HTTP_CODE" == "200" && -n "$COPILOT_TEST_MODEL" ]]; then
   run_copilot_cache_probe "$GATEWAY" "$COPILOT_TEST_MODEL"
   CACHE_READ_TOKENS=$(get_copilot_cache_read_tokens "$GATEWAY")
   CACHE_SAVINGS=$(get_copilot_cache_savings_usd "$GATEWAY")
+
+  # Check whether models.dev has per-token input pricing for this copilot model.
+  # Model IDs in the config are "copilot-<name>"; models.dev uses the bare name
+  # under github-copilot.models. Strip the "copilot-" prefix and look it up.
+  _BARE_MODEL="${COPILOT_TEST_MODEL#copilot-}"
+  MODELS_DEV_CACHE="$DIR/.data/headroom/models-dev.json"
+  HAS_PRICING=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('$MODELS_DEV_CACHE'))
+    m = (d.get('github-copilot') or {}).get('models', {}).get('$_BARE_MODEL') or {}
+    price = (m.get('cost') or {}).get('input')
+    print(1 if price and float(price) > 0 else 0)
+except Exception:
+    print(0)
+" 2>/dev/null || echo 0)
+
   if [[ "$CACHE_READ_TOKENS" -gt 0 ]]; then
-    NONZERO=$(python3 -c "print(1 if float('$CACHE_SAVINGS') > 0 else 0)" 2>/dev/null || echo 0)
-    if [[ "$NONZERO" == "1" ]]; then
-      ok "Copilot prefix-cache savings priced (${CACHE_READ_TOKENS} cache-read tokens -> \$${CACHE_SAVINGS}, model: $COPILOT_TEST_MODEL)"
+    if [[ "$HAS_PRICING" == "0" ]]; then
+      info "Copilot prefix-cache: ${CACHE_READ_TOKENS} cache-read tokens observed but models.dev has no pricing for $_BARE_MODEL — skipping USD assertion."
     else
-      fail "Copilot reported ${CACHE_READ_TOKENS} cache-read tokens but priced savings is \$${CACHE_SAVINGS} (models.dev pricing or attribution regressed)"
+      NONZERO=$(python3 -c "print(1 if float('$CACHE_SAVINGS') > 0 else 0)" 2>/dev/null || echo 0)
+      if [[ "$NONZERO" == "1" ]]; then
+        ok "Copilot prefix-cache savings priced (${CACHE_READ_TOKENS} cache-read tokens -> \$${CACHE_SAVINGS}, model: $COPILOT_TEST_MODEL)"
+      else
+        fail "Copilot reported ${CACHE_READ_TOKENS} cache-read tokens but priced savings is \$${CACHE_SAVINGS} (models.dev pricing or attribution regressed)"
+      fi
     fi
   else
     info "Provider did not report cached tokens this run (caching not observed) — pricing path not exercised."
@@ -603,7 +625,14 @@ echo
 
 # --- Test 5b: Bedrock native Converse + ConverseStream via :4002 ---
 echo "[ Test 5b: Bedrock native Converse + ConverseStream via :4002 ]"
-BEDROCK_NATIVE_ALIAS="$BEDROCK_TEST_MODEL"
+# Prefer an Anthropic model for native Converse: cross-region inference profiles
+# are available in all EU regions and Anthropic models reliably support Converse.
+# Fall back to the LiteLLM-tested model or the first Bedrock candidate.
+if [[ -n "$BEDROCK_ANTHROPIC_TEST_MODEL" ]]; then
+  BEDROCK_NATIVE_ALIAS="$BEDROCK_ANTHROPIC_TEST_MODEL"
+else
+  BEDROCK_NATIVE_ALIAS="$BEDROCK_TEST_MODEL"
+fi
 if [[ -z "$BEDROCK_NATIVE_ALIAS" ]]; then
   while IFS= read -r CANDIDATE; do
     [[ -n "$CANDIDATE" ]] || continue

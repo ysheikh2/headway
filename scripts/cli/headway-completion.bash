@@ -1,16 +1,10 @@
-#!/usr/bin/env bash
-# Tab completion for the headway CLI.
-#
-# Bash: add to ~/.bashrc:
-#   eval "$(headway completion)"
-#
-# Zsh: add to ~/.zshrc:
-#   eval "$(headway completion)"
+# headway tab completion (bash/zsh via bashcompinit).
+# Source via: eval "$(headway completion)"
 
 _headway_commands=(
   up down update restart reset auth
   init config
-  doctor stats test
+  doctor stats test e2e
   cleanup
   uninstall secret-scan completion help
 )
@@ -81,4 +75,3 @@ _headway_bash_completion() {
 }
 
 complete -F _headway_bash_completion headway
-complete -F _headway_bash_completion ./headway

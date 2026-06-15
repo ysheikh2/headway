@@ -70,7 +70,11 @@ services:
       - "--code-aware"
     depends_on:
       litellm:
-        condition: service_healthy
+        # Use service_started (not service_healthy) so headroom can start
+        # immediately alongside litellm. During Copilot device auth, litellm
+        # is unhealthy for up to ~3 minutes; service_healthy would cause
+        # docker compose to error before the user can complete auth.
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8787/livez"]
       interval: 30s

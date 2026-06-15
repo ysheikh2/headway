@@ -58,7 +58,7 @@ When debugging provider failures, test Copilot/OpenAI-compatible and Bedrock-nat
 - Keep Bedrock alias mapping flow driven by `headway config regen`.
 - Keep edits minimal and targeted; avoid duplicating README runbook content here.
 - `headway` reads only from `.env` — never inherit AWS env vars from the shell; `load_env` unsets all headway-managed vars before sourcing `.env`.
-- `require_env` validates `AWS_PROFILE`, `AWS_REGION`, and `BEDROCK_AWS_PROFILE` — all three are required by `docker-compose.yml`.
+- `require_env` validates `AWS_PROFILE` and `AWS_REGION`. `BEDROCK_AWS_PROFILE` is not checked by `require_env` (it defaults to `AWS_PROFILE` in the shell and questionnaire), but `docker-compose.yml` does require it via `${BEDROCK_AWS_PROFILE:?}`; `.env.template` ensures it is always written during `headway init`.
 
 ## CI / Docker Build Triggers
 

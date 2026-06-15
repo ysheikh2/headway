@@ -3,7 +3,16 @@
 
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve symlink chain so ROOT_DIR points at the real repo, not an intermediate link.
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+  _link="$(readlink "$_self")"
+  [[ "$_link" == /* ]] || _link="$(dirname "$_self")/$_link"
+  _self="$_link"
+  unset _link
+done
+ROOT_DIR="$(cd "$(dirname "$_self")" && pwd)"
+unset _self
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 ENV_FILE="$ROOT_DIR/.env"
 KILO_CONF="$HOME/.config/kilo/kilo.jsonc"
@@ -50,11 +59,6 @@ require_env() {
   fi
   if [[ -z "${AWS_REGION:-}" ]]; then
     echo "ERROR: AWS_REGION is not set in $ENV_FILE"
-    echo "       Run 'headway init' to configure"
-    exit 1
-  fi
-  if [[ -z "${BEDROCK_AWS_PROFILE:-}" ]]; then
-    echo "ERROR: BEDROCK_AWS_PROFILE is not set in $ENV_FILE"
     echo "       Run 'headway init' to configure"
     exit 1
   fi
@@ -155,6 +159,18 @@ prompt_label_for_env_key() {
     HEADROOM_BEDROCK_IMAGE)
       echo "Bedrock lane image"
       ;;
+    HEADROOM_COMPRESS_USER_MESSAGES)
+      echo "Compress user messages (1=on, 0=off) — reduces tokens sent, default is fine"
+      ;;
+    HEADROOM_MIN_TOKENS)
+      echo "Min tokens before compression kicks in — default is fine"
+      ;;
+    HEADROOM_PROTECT_RECENT)
+      echo "Recent messages to keep uncompressed — default is fine"
+      ;;
+    HEADWAY_BEDROCK_AUTO_CACHE_CONTROL)
+      echo "Auto cache-control for Bedrock (1=on) — default is fine"
+      ;;
     *)
       echo "$key"
       ;;
@@ -213,6 +229,18 @@ prompt_with_default() {
   fi
 }
 
+prompt_required() {
+  local label="$1"
+  local input=""
+  while [[ -z "$input" ]]; do
+    read -r -p "$label (required): " input
+    if [[ -z "$input" ]]; then
+      echo "  This field is required — please enter a value." >&2
+    fi
+  done
+  echo "$input"
+}
+
 run_init_questionnaire_if_needed() {
   local aws_profile_override="${1:-}"
 
@@ -240,10 +268,13 @@ run_init_questionnaire_if_needed() {
     return 0
   fi
 
-  echo "Missing .env values detected. Running quick setup prompts (press Enter to accept defaults)."
+  echo "A few quick questions to set up your .env (press Enter to accept defaults — defaults are fine for most fields)."
+  echo
 
   local aws_profile="$(get_env_key "AWS_PROFILE")"
-  while IFS= read -r key; do
+  # Use fd 3 for the key iterator so that read -r -p inside prompt_with_default
+  # keeps reading from stdin (the terminal) rather than from the key stream.
+  while IFS= read -r key <&3; do
     local current
     current="$(get_env_key "$key")"
     if [[ -n "$current" ]]; then
@@ -261,13 +292,17 @@ run_init_questionnaire_if_needed() {
     local label
     label="$(prompt_label_for_env_key "$key")"
     local answer
-    answer="$(prompt_with_default "$label" "$default_value")"
+    if [[ "$key" == "AWS_PROFILE" ]]; then
+      answer="$(prompt_required "$label")"
+    else
+      answer="$(prompt_with_default "$label" "$default_value")"
+    fi
     set_env_key "$key" "$answer"
 
     if [[ "$key" == "AWS_PROFILE" ]]; then
       aws_profile="$answer"
     fi
-  done < <(env_template_keys)
+  done 3< <(env_template_keys)
 }
 
 set_env_key() {
@@ -383,27 +418,213 @@ sync_pricing() {
   fi
 }
 
+copilot_token_file() {
+  echo "$ROOT_DIR/.data/litellm/github_copilot/access-token"
+}
+
+copilot_auth_pending() {
+  [[ ! -f "$(copilot_token_file)" ]]
+}
+
+# Return true if litellm logged "API key expired" since it last started.
+# Used to detect a stale token that needs device re-auth even when the
+# token file still exists on disk.
+copilot_token_expired_in_logs() {
+  local started_at
+  started_at="$(docker inspect --format='{{.State.StartedAt}}' litellm-gateway 2>/dev/null || true)"
+  docker logs --since "${started_at:-1970-01-01T00:00:00Z}" litellm-gateway 2>/dev/null |
+    grep -q "API key expired" || return 1
+}
+
+# Wipe stale Copilot token files so the next wait_for_copilot_auth call
+# treats the state as "auth needed" again.
+copilot_clear_token() {
+  local token_dir
+  token_dir="$(dirname "$(copilot_token_file)")"
+  rm -f "$token_dir/access-token" "$token_dir/api-key.json" 2>/dev/null || true
+}
+
+# After wait_for_copilot_auth completes (access-token written), LiteLLM may
+# still be in the process of exchanging the OAuth token for an api-key.json.
+# Wait up to 30 s for it to appear before calling generate_config — that file
+# is what the Python generator reads to discover named copilot-* models.
+wait_for_copilot_api_key() {
+  local api_key_file
+  api_key_file="$(dirname "$(copilot_token_file)")/api-key.json"
+  local i
+  for ((i = 0; i < 10; i++)); do
+    [[ -f "$api_key_file" ]] && return 0
+    sleep 3
+  done
+  return 0 # proceed even if the file never appeared
+}
+
+# After docker compose up, verify that Copilot models actually loaded into
+# litellm.  If the model list has zero copilot-* entries, the token on disk
+# may have expired beyond auto-refresh.  In that case, wipe the stale tokens,
+# restart litellm so it can start a fresh device-auth flow, and hand off to
+# wait_for_copilot_auth so the user sees the device code and completes auth.
+ensure_copilot_healthy() {
+  local aws_profile_name="$1"
+  local discovery_profile="$2"
+
+  # Give litellm a moment to finish loading its config.
+  local i
+  for ((i = 0; i < 10; i++)); do
+    local count
+    count=$(curl -sf --max-time 5 "$LITELLM_ADMIN_URL/v1/models" 2>/dev/null |
+      python3 -c "
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    print(sum(1 for m in d.get('data',[]) if m['id'].startswith('copilot-')))
+except Exception:
+    print(0)
+" 2>/dev/null) || count=0
+    if [[ "${count:-0}" -gt 0 ]]; then
+      return 0 # Copilot models loaded — all good
+    fi
+    sleep 3
+  done
+
+  # Zero Copilot models after 30 s — token likely expired or never refreshed.
+  if copilot_token_expired_in_logs; then
+    echo
+    echo "Copilot token expired — starting re-authentication..."
+    copilot_clear_token
+    docker compose -f "$COMPOSE_FILE" restart litellm 2>/dev/null || true
+    sleep 5 # let litellm restart and issue a device code
+    wait_for_copilot_auth 600 || return 1
+    wait_for_copilot_api_key
+    docker compose -f "$COMPOSE_FILE" restart headroom 2>/dev/null || true
+    echo "Refreshing model config to include Copilot models..."
+    generate_config "$aws_profile_name" "$discovery_profile"
+    docker compose -f "$COMPOSE_FILE" restart litellm 2>/dev/null || true
+    wait_for_http "$GATEWAY_URL/livez" 30 2 >/dev/null ||
+      echo "WARNING: gateway did not become healthy after Copilot re-auth"
+  else
+    # No "expired" log — possibly no Copilot config (init ran before auth).
+    # This is a silent no-op; the user can run 'headway auth' later.
+    echo "NOTE: No Copilot models loaded. If you have a GitHub Copilot subscription,"
+    echo "      run: headway auth"
+  fi
+}
+
+# Read the most-recently-issued device code from litellm-gateway logs.
+copilot_current_code() {
+  docker logs litellm-gateway 2>/dev/null |
+    grep -oE 'code [A-Z0-9]{4}-[A-Z0-9]{4}' |
+    tail -1 |
+    awk '{print $2}' || true
+}
+
+# Poll until the Copilot token file appears or timeout (seconds, default 600).
+# Streams the current device code to stdout each time it changes so users
+# can enter whichever code is currently active.
+wait_for_copilot_auth() {
+  local timeout="${1:-600}"
+  local elapsed=0
+  local last_code=""
+  local logs_since
+  logs_since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  if ! copilot_auth_pending; then
+    return 0
+  fi
+
+  echo
+  echo "Copilot device auth required. You have up to $((timeout / 60)) minutes."
+  echo "  1. Visit   https://github.com/login/device"
+  echo "  2. Enter   the code shown below (refreshes every ~60s if not used)"
+  echo
+
+  while [[ $elapsed -lt $timeout ]]; do
+    if ! copilot_auth_pending; then
+      echo "  Copilot auth complete."
+      return 0
+    fi
+
+    # LiteLLM only makes 3 device-code attempts (~60s each) before giving up.
+    # When exhausted, no new codes are issued and the token file is never written.
+    # Use --since to check only logs after the last restart so stale entries
+    # from a prior exhaustion don't trigger an immediate second restart.
+    if docker logs --since "$logs_since" litellm-gateway 2>/dev/null |
+      grep -q "Failed to get access token after 3 attempts"; then
+      echo
+      echo "  LiteLLM auth window expired — restarting to issue a fresh code..."
+      docker compose -f "$COMPOSE_FILE" restart litellm 2>/dev/null || true
+      logs_since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      sleep 8
+      last_code=""
+      continue
+    fi
+
+    local code
+    code=$(copilot_current_code)
+    if [[ -n "$code" && "$code" != "$last_code" ]]; then
+      echo "  Current code: $code  →  https://github.com/login/device"
+      last_code="$code"
+      # Copy code to clipboard (macOS / Linux X11 / Linux Wayland / WSL2).
+      if command -v pbcopy >/dev/null 2>&1; then
+        printf '%s' "$code" | pbcopy
+        echo "  (code copied to clipboard)"
+      elif command -v clip.exe >/dev/null 2>&1; then
+        printf '%s' "$code" | clip.exe
+        echo "  (code copied to clipboard)"
+      elif command -v wl-copy >/dev/null 2>&1; then
+        printf '%s' "$code" | wl-copy
+        echo "  (code copied to clipboard)"
+      elif command -v xclip >/dev/null 2>&1; then
+        printf '%s' "$code" | xclip -selection clipboard
+        echo "  (code copied to clipboard)"
+      elif command -v xsel >/dev/null 2>&1; then
+        printf '%s' "$code" | xsel --clipboard --input
+        echo "  (code copied to clipboard)"
+      fi
+      # Open the auth page in the default browser.
+      if command -v open >/dev/null 2>&1; then
+        open "https://github.com/login/device" 2>/dev/null || true
+      elif command -v xdg-open >/dev/null 2>&1; then
+        xdg-open "https://github.com/login/device" 2>/dev/null || true
+      elif command -v cmd.exe >/dev/null 2>&1; then
+        cmd.exe /c start "https://github.com/login/device" 2>/dev/null || true
+      fi
+    fi
+    sleep 5
+    elapsed=$((elapsed + 5))
+  done
+
+  echo "ERROR: Copilot auth timed out after ${timeout}s."
+  echo "       Re-run: headway auth"
+  return 1
+}
+
 print_device_hint() {
-  local code_line
-  code_line=$(docker logs litellm-gateway 2>/dev/null | grep -E 'Please visit https://github.com/login/device and enter code' | tail -1 || true)
-  if [[ -n "$code_line" ]]; then
+  if ! copilot_auth_pending; then
+    return 0
+  fi
+  local code
+  code=$(copilot_current_code)
+  if [[ -n "$code" ]]; then
     echo "Copilot device auth pending:"
-    echo "  $code_line"
+    echo "  Please visit https://github.com/login/device and enter code $code to authenticate."
     echo "  Open: https://github.com/login/device"
   fi
 }
 
 check_copilot_auth_hint() {
-  local code_line
-  code_line=$(docker logs litellm-gateway 2>/dev/null | grep -E 'Please visit https://github.com/login/device and enter code' | tail -1 || true)
-  if [[ -n "$code_line" ]]; then
+  if ! copilot_auth_pending; then
+    return 0
+  fi
+  local code
+  code=$(copilot_current_code)
+  if [[ -n "$code" ]]; then
     echo "WARNING: Copilot device auth is still pending. Complete it before running tests:"
-    echo "  $code_line"
+    echo "  Please visit https://github.com/login/device and enter code $code to authenticate."
     echo "  Open: https://github.com/login/device"
     echo "  Then run: headway auth"
-    return 1
   fi
-  return 0
+  return 1
 }
 
 cmd_init() {
@@ -435,6 +656,9 @@ cmd_init() {
   require_cmd aws
   require_docker
 
+  echo
+  echo "--- Step 1/3: Configure environment ---"
+  echo
   load_env
   run_init_questionnaire_if_needed "$aws_profile_override"
   ensure_env_defaults "$aws_profile_override"
@@ -446,24 +670,37 @@ cmd_init() {
   local discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-$bedrock_profile}"
   local aws_region="$AWS_REGION"
 
+  echo
+  echo "--- Step 2/3: Verify AWS access ---"
+  echo
   ensure_aws_session "$aws_profile_name" "$aws_region"
   ensure_aws_session "$bedrock_profile" "$aws_region"
   ensure_aws_session "$discovery_profile" "$aws_region"
+
+  echo
+  echo "--- Step 3/3: Generate gateway configuration ---"
+  echo
 
   setup_kilo_config
   setup_claude_config "$bedrock_profile" "$aws_region"
 
   if [[ "$skip_config" != "true" ]]; then
+    echo "Discovering Bedrock models and generating gateway config..."
+    echo "(Copilot models will be added automatically when you run 'headway up')"
+    echo
     generate_config "$aws_profile_name" "$discovery_profile"
   fi
 
   setup_shell_completion
 
+  echo
   echo "init complete"
   echo "- AWS_PROFILE: $aws_profile_name"
   echo "- BEDROCK_AWS_PROFILE: $bedrock_profile"
   echo "- BEDROCK_DISCOVERY_AWS_PROFILE: $discovery_profile"
   echo "- AWS_REGION: $aws_region"
+  echo
+  echo "Next: run 'headway up' to start the gateway and authenticate Copilot."
 }
 
 cmd_up() {
@@ -498,15 +735,43 @@ cmd_up() {
 
   local aws_profile_name="$AWS_PROFILE"
   local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
+  local discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-$bedrock_profile}"
   local aws_region="$AWS_REGION"
 
   ensure_aws_session "$aws_profile_name" "$aws_region"
   ensure_aws_session "$bedrock_profile" "$aws_region"
+  ensure_aws_session "$discovery_profile" "$aws_region"
 
+  sync_pricing
+
+  echo
+  echo "--- Starting gateway containers ---"
+  echo
   docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
 
+  # Fresh install (no token): guide user through device auth interactively.
+  if copilot_auth_pending; then
+    echo
+    echo "--- Authenticating GitHub Copilot ---"
+    echo
+    wait_for_copilot_auth 600 || exit 1
+    wait_for_copilot_api_key
+    # Restart headroom so it connects to litellm now that auth is done.
+    docker compose -f "$COMPOSE_FILE" restart headroom 2>/dev/null || true
+    # Regen config to add Copilot model entries that were skipped pre-auth.
+    echo
+    echo "--- Refreshing model config with Copilot models ---"
+    echo
+    generate_config "$aws_profile_name" "$discovery_profile"
+    docker compose -f "$COMPOSE_FILE" restart litellm 2>/dev/null || true
+  fi
+
+  echo
+  echo "--- Waiting for gateway to become healthy ---"
+  echo
   if ! wait_for_http "$GATEWAY_URL/livez" 30 2 >/dev/null; then
     echo "ERROR: gateway did not become healthy at $GATEWAY_URL/livez"
+    echo "       Check logs: docker logs litellm-gateway"
     exit 1
   fi
   if ! wait_for_http "$BEDROCK_URL/livez" 30 2 >/dev/null; then
@@ -514,7 +779,13 @@ cmd_up() {
     exit 1
   fi
 
-  print_device_hint
+  # Token exists but may have expired (e.g. reinstall with old token file).
+  # Detects expiry from litellm logs and auto-triggers re-auth if needed.
+  if ! copilot_auth_pending; then
+    ensure_copilot_healthy "$aws_profile_name" "$discovery_profile" || exit 1
+  fi
+
+  echo
   echo "gateway is up"
 }
 
@@ -541,26 +812,57 @@ cmd_update() {
   compose_pull
   docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
 
-  wait_for_http "$GATEWAY_URL/livez" 20 2 >/dev/null || {
+  if copilot_auth_pending; then
+    wait_for_copilot_auth 600 || exit 1
+    wait_for_copilot_api_key
+    docker compose -f "$COMPOSE_FILE" restart headroom 2>/dev/null || true
+    generate_config "$aws_profile_name" "$discovery_profile"
+    docker compose -f "$COMPOSE_FILE" restart litellm 2>/dev/null || true
+  fi
+
+  if ! wait_for_http "$GATEWAY_URL/livez" 30 2 >/dev/null; then
     echo "ERROR: gateway failed health check after update"
     exit 1
-  }
-  wait_for_http "$BEDROCK_URL/livez" 20 2 >/dev/null || {
+  fi
+  if ! wait_for_http "$BEDROCK_URL/livez" 30 2 >/dev/null; then
     echo "ERROR: bedrock lane failed health check after update"
     exit 1
-  }
+  fi
+
+  if ! copilot_auth_pending; then
+    ensure_copilot_healthy "$aws_profile_name" "$discovery_profile" || exit 1
+  fi
 
   echo "update complete"
 }
 
 cmd_restart() {
+  require_cmd aws
+  require_cmd python3
   require_docker
   load_env
   require_env
   sync_headroom_tuning_env
 
+  local aws_profile_name="$AWS_PROFILE"
+  local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
+  local discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-$bedrock_profile}"
+  local aws_region="$AWS_REGION"
+
+  ensure_aws_session "$aws_profile_name" "$aws_region"
+  ensure_aws_session "$bedrock_profile" "$aws_region"
+  ensure_aws_session "$discovery_profile" "$aws_region"
+
   docker compose -f "$COMPOSE_FILE" down
   docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
+
+  if copilot_auth_pending; then
+    wait_for_copilot_auth 600 || exit 1
+    wait_for_copilot_api_key
+    generate_config "$aws_profile_name" "$discovery_profile"
+    docker compose -f "$COMPOSE_FILE" restart litellm 2>/dev/null || true
+    docker compose -f "$COMPOSE_FILE" restart headroom 2>/dev/null || true
+  fi
 
   if ! wait_for_http "$GATEWAY_URL/livez" 30 2 >/dev/null; then
     echo "ERROR: gateway did not become healthy at $GATEWAY_URL/livez"
@@ -571,7 +873,10 @@ cmd_restart() {
     exit 1
   fi
 
-  print_device_hint
+  if ! copilot_auth_pending; then
+    ensure_copilot_healthy "$aws_profile_name" "$discovery_profile" || exit 1
+  fi
+
   echo "restarted"
 }
 
@@ -592,26 +897,52 @@ cmd_auth() {
 
   local aws_profile_name="$AWS_PROFILE"
   local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
+  local discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-$bedrock_profile}"
   local aws_region="$AWS_REGION"
 
   ensure_aws_session "$aws_profile_name" "$aws_region"
   ensure_aws_session "$bedrock_profile" "$aws_region"
+  ensure_aws_session "$discovery_profile" "$aws_region"
 
-  docker rm -f litellm-gateway headroom-gateway 2>/dev/null || true
-  docker compose -f "$COMPOSE_FILE" up -d litellm headroom
+  # If litellm is already running and auth is in progress, don't kill it —
+  # restarting mid-flow loses the device session and forces a new code.
+  local litellm_state
+  litellm_state=$(docker inspect litellm-gateway --format '{{.State.Status}}' 2>/dev/null || echo "absent")
 
-  docker rm -f headroom-bedrock-gateway 2>/dev/null || true
-  if ! docker compose -f "$COMPOSE_FILE" up -d headroom-bedrock; then
-    echo "WARNING: bedrock lane failed to start; Copilot lane is still running"
+  if [[ "$litellm_state" == "running" ]] && copilot_auth_pending; then
+    echo "Copilot auth already in progress — waiting for it to complete..."
+    wait_for_copilot_auth 600 || exit 1
+  elif [[ "$litellm_state" != "running" ]] || copilot_auth_pending; then
+    # litellm not running or token missing: start/restart litellm fresh
+    docker rm -f litellm-gateway headroom-gateway 2>/dev/null || true
+    docker compose -f "$COMPOSE_FILE" up -d litellm
+    wait_for_copilot_auth 600 || exit 1
+  elif copilot_token_expired_in_logs; then
+    # Token file exists but litellm reports it as expired — wipe and re-auth.
+    echo "Existing Copilot token has expired — re-authenticating..."
+    copilot_clear_token
+    docker compose -f "$COMPOSE_FILE" restart litellm 2>/dev/null || true
+    sleep 5
+    wait_for_copilot_auth 600 || exit 1
   fi
 
-  wait_for_http "$GATEWAY_URL/livez" 30 2 >/dev/null || {
-    echo "ERROR: gateway failed to become healthy"
-    print_device_hint
-    exit 1
-  }
+  # Wait for api-key.json then regenerate config so named copilot-* models load.
+  wait_for_copilot_api_key
+  generate_config "$aws_profile_name" "$discovery_profile"
+  docker compose -f "$COMPOSE_FILE" restart litellm 2>/dev/null || true
 
-  print_device_hint
+  # Token is now present — bring headroom up (or restart it) cleanly.
+  docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
+
+  # Also refresh bedrock lane.
+  docker compose -f "$COMPOSE_FILE" up -d headroom-bedrock 2>/dev/null || true
+
+  if ! wait_for_http "$GATEWAY_URL/livez" 30 2 >/dev/null; then
+    echo "ERROR: gateway failed to become healthy after auth"
+    echo "       Check logs: docker logs litellm-gateway"
+    exit 1
+  fi
+
   echo "auth refresh complete"
 }
 
@@ -871,6 +1202,14 @@ cmd_reset() {
   compose_pull
   docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
 
+  if copilot_auth_pending; then
+    wait_for_copilot_auth 600 || exit 1
+    wait_for_copilot_api_key
+    docker compose -f "$COMPOSE_FILE" restart headroom 2>/dev/null || true
+    generate_config "$aws_profile_name" "$discovery_profile"
+    docker compose -f "$COMPOSE_FILE" restart litellm 2>/dev/null || true
+  fi
+
   if ! wait_for_http "$GATEWAY_URL/livez" 30 2 >/dev/null; then
     echo "ERROR: gateway did not become healthy at $GATEWAY_URL/livez"
     exit 1
@@ -880,7 +1219,10 @@ cmd_reset() {
     exit 1
   fi
 
-  print_device_hint
+  if ! copilot_auth_pending; then
+    ensure_copilot_healthy "$aws_profile_name" "$discovery_profile" || exit 1
+  fi
+
   echo "reset complete — gateway is back up"
 }
 
@@ -1031,10 +1373,12 @@ cmd_uninstall() {
     zsh) rc_file="$HOME/.zshrc" ;;
     bash) rc_file="$HOME/.bashrc" ;;
   esac
-  if [[ -n "$rc_file" && -f "$rc_file" ]] && grep -qF "headway completion" "$rc_file" 2>/dev/null; then
+  if [[ -n "$rc_file" && -f "$rc_file" ]] &&
+    (grep -qF "# headway tab completion" "$rc_file" 2>/dev/null ||
+      grep -qF "headway completion" "$rc_file" 2>/dev/null); then
     local tmp
     tmp="$(mktemp)"
-    grep -vF "headway completion" "$rc_file" >"$tmp" || true
+    grep -v "headway tab completion\|headway completion" "$rc_file" >"$tmp" || true
     mv "$tmp" "$rc_file"
     echo "removed completion lines from $rc_file"
   fi
@@ -1079,6 +1423,10 @@ cmd_secret_scan() {
   exec bash "$ROOT_DIR/scripts/cli/secret-scan.sh" "$@"
 }
 
+cmd_e2e() {
+  exec bash "$ROOT_DIR/scripts/cli/headway-e2e-test.sh" "$@"
+}
+
 setup_shell_completion() {
   local shell_name
   shell_name="$(basename "${SHELL:-}")"
@@ -1120,8 +1468,10 @@ setup_shell_completion() {
       ;;
   esac
 
-  # Idempotency: skip if the eval line (or anything referencing headway completion) is already present.
-  if grep -qF "headway completion" "$rc_file" 2>/dev/null; then
+  # Idempotency: skip if the eval line is already present.
+  # installer.sh writes "# headway tab completion"; legacy manual adds write "headway completion".
+  if grep -qF "# headway tab completion" "$rc_file" 2>/dev/null ||
+    grep -qF "headway completion" "$rc_file" 2>/dev/null; then
     echo "- completion: already configured in $rc_file (skipped)"
     return 0
   fi
@@ -1165,7 +1515,7 @@ ZSHEOF
       cat <<'FISHEOF'
 # headway fish completion
 
-set -l _hw_cmds up down restart reset auth init config doctor stats test cleanup uninstall secret-scan completion help
+set -l _hw_cmds up down update restart reset auth init config doctor stats test e2e cleanup uninstall secret-scan completion help
 
 complete -c headway -f -n '__fish_use_subcommand' -a "$_hw_cmds"
 
@@ -1247,7 +1597,10 @@ DIAGNOSTICS
       Usage and cost savings report
 
   test [...]
-      Run the end-to-end test suite
+      Run the smoke test suite (requires live gateway)
+
+  e2e [--branch <branch>] [--aws-profile <profile>] [--region <region>]
+      Full end-to-end install test: fresh clone → init → up → smoke tests → down → cleanup
 
 MAINTENANCE
   cleanup <data|images|kilo|claude|all> [--yes]
@@ -1322,6 +1675,9 @@ main() {
     secret-scan)
       cmd_secret_scan "$@"
       ;;
+    e2e)
+      cmd_e2e "$@"
+      ;;
     cleanup)
       cmd_cleanup "$@"
       ;;
@@ -1333,6 +1689,10 @@ main() {
       ;;
     help | -h | --help)
       print_help
+      ;;
+    require_env)
+      load_env
+      require_env
       ;;
     *)
       echo "Unknown command: $cmd"
