@@ -338,15 +338,18 @@ def _apply_prefix_cache_pricing(payload: dict[str, Any]) -> None:
     payload["prefix_cache"] = prefix_cache
 
     # Surface in the cost block and summary breakdown the dashboard/CLI read from.
+    # savings_usd tracks gross read savings only — never goes negative.
+    # write_premium_usd is a separate cost field so the dashboard can show both.
     cost = _as_dict(payload.get("cost"))
-    cost["cache_savings_usd"] = float(cost.get("cache_savings_usd") or 0.0) + net
-    cost["savings_usd"] = float(cost.get("savings_usd") or 0.0) + net
+    cost["cache_savings_usd"] = float(cost.get("cache_savings_usd") or 0.0) + total_read_savings
+    cost["savings_usd"] = float(cost.get("savings_usd") or 0.0) + total_read_savings
+    cost["write_premium_usd"] = float(cost.get("write_premium_usd") or 0.0) + total_write_premium
     payload["cost"] = cost
 
     summary = _as_dict(payload.get("summary"))
     sum_cost = _as_dict(summary.get("cost"))
     breakdown = _as_dict(sum_cost.get("breakdown"))
-    breakdown["cache_savings_usd"] = float(breakdown.get("cache_savings_usd") or 0.0) + net
+    breakdown["cache_savings_usd"] = float(breakdown.get("cache_savings_usd") or 0.0) + total_read_savings
     sum_cost["breakdown"] = breakdown
     sum_cost["total_saved_usd"] = float(sum_cost.get("total_saved_usd") or 0.0) + net
     summary["cost"] = sum_cost

@@ -193,6 +193,8 @@
                     <span x-show="!((stats.cost?.savings_usd || 0) > 0)"
                           x-text="formatNumber(stats.requests?.total || 0) + ' requests processed'"></span>
                 </div>
+                <div class="mt-1 text-xs text-amber-500/80" x-show="(stats.cost?.write_premium_usd || 0) > 0"
+                     x-text="'−$' + formatCurrency(stats.cost?.write_premium_usd || 0) + ' cache write premium'"></div>
                 <div class="mt-1 text-xs text-gray-600" x-show="(stats.persistent_savings?.lifetime?.compression_savings_usd || 0) > 0">
                     Lifetime: <span x-text="'$' + formatCurrency(stats.persistent_savings?.lifetime?.compression_savings_usd || 0)"></span>
                 </div>
@@ -1640,9 +1642,13 @@
 
                 <template x-if="!hasHistoricalData">
                     <div class="bg-surface rounded-lg border border-border p-10 text-center">
-                        <div class="text-lg text-gray-300 mb-2">No persisted savings history yet</div>
+                        <div class="text-lg text-gray-300 mb-2">No history yet</div>
                         <div class="text-sm text-gray-500 max-w-2xl mx-auto">
-                            Historical data is written locally after proxy requests save tokens. Keep using Headroom and this view will fill in automatically across restarts.
+                            History checkpoints are saved to disk as you make requests through the proxy.
+                            Once tokens have been saved across at least one session, data will appear here automatically.
+                        </div>
+                        <div class="mt-4 text-xs text-gray-600">
+                            Switch to <span class="text-accent font-medium">Session</span> to see live stats for your current session.
                         </div>
                     </div>
                 </template>
