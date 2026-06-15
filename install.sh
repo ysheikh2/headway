@@ -155,7 +155,12 @@ do_install() {
     local prev_ref
     prev_ref="$(git -C "$INSTALL_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")"
     info "Found existing install ($prev_ref) — pulling latest..."
-    git -C "$INSTALL_DIR" pull --ff-only
+    git -C "$INSTALL_DIR" fetch origin
+    if [[ -n "$REPO_BRANCH" ]]; then
+      git -C "$INSTALL_DIR" checkout -B "$REPO_BRANCH" "origin/$REPO_BRANCH"
+    else
+      git -C "$INSTALL_DIR" merge --ff-only
+    fi
     local new_ref
     new_ref="$(git -C "$INSTALL_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")"
     if [[ "$prev_ref" == "$new_ref" ]]; then
