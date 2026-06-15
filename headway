@@ -1450,7 +1450,7 @@ ZSHEOF
       cat <<'FISHEOF'
 # headway fish completion
 
-set -l _hw_cmds up down restart reset auth init config doctor stats test cleanup uninstall secret-scan completion help
+set -l _hw_cmds up down update restart reset auth init config doctor stats test e2e cleanup uninstall secret-scan completion help
 
 complete -c headway -f -n '__fish_use_subcommand' -a "$_hw_cmds"
 
