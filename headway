@@ -50,6 +50,11 @@ require_env() {
     echo "       Run 'headway init' to configure"
     exit 1
   fi
+  if [[ -z "${BEDROCK_AWS_PROFILE:-}" ]]; then
+    echo "ERROR: BEDROCK_AWS_PROFILE is not set in $ENV_FILE"
+    echo "       Run 'headway init' to configure"
+    exit 1
+  fi
 }
 
 require_cmd() {

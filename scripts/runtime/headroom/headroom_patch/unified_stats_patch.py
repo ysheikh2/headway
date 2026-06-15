@@ -451,6 +451,29 @@ def _merge_unified_stats(base: dict[str, Any], bedrock: _BedrockStats) -> dict[s
         unified["requests_cached"] = copilot_cached + cached
         unified["requests_failed"] = copilot_failed + failed
 
+        # Merge Bedrock native token counts into the top-level tokens block so
+        # dashboard sections that read stats.tokens.* (Token Usage box, sparklines)
+        # show unified data instead of copilot-only zeros.
+        tokens["total_before_compression"] = (
+            _to_int(tokens.get("total_before_compression")) + input_toks
+        )
+        tokens["saved"] = _to_int(tokens.get("saved")) + saved
+        tokens["proxy_compression_saved"] = (
+            _to_int(tokens.get("proxy_compression_saved")) + comp_saved
+        )
+        tokens["input"] = _to_int(tokens.get("input")) + tokens_after
+        tokens["output"] = _to_int(tokens.get("output")) + output_toks
+
+        # Merge Bedrock native request counts into the top-level requests block
+        # so the Providers box shows a bedrock-native entry (only when there's traffic).
+        if api > 0:
+            by_provider = _as_dict(requests.get("by_provider"))
+            by_provider["bedrock-native"] = _to_int(by_provider.get("bedrock-native")) + api
+            requests["by_provider"] = by_provider
+
+        payload["tokens"] = tokens
+        payload["requests"] = requests
+
     payload["unified"] = unified
     payload["lanes"] = lanes
     payload["raw_unified_sources"] = {
@@ -480,8 +503,10 @@ def _merge_unified_stats(base: dict[str, Any], bedrock: _BedrockStats) -> dict[s
         per_model = _as_dict(cost_block.get("per_model"))
 
         # Accumulate Bedrock USD savings to add to the cost block afterwards.
+        # Track gross read savings and write premium separately so savings_usd never goes negative.
         bedrock_compression_savings_usd = 0.0
-        bedrock_cache_savings_usd = 0.0
+        bedrock_cache_read_savings_usd = 0.0
+        bedrock_write_premium_usd = 0.0
         bedrock_without_usd = 0.0
         bedrock_with_usd = 0.0
 
@@ -500,7 +525,8 @@ def _merge_unified_stats(base: dict[str, Any], bedrock: _BedrockStats) -> dict[s
 
             # USD savings: compression (tokens removed) + cache reads (10% of input).
             compression_savings_usd = 0.0
-            cache_savings_usd = 0.0
+            cache_read_savings_usd = 0.0
+            write_premium_usd = 0.0
             rec = _lookup_record(display_model)
             if rec is not None:
                 in_price, out_price = rec["input"], rec["output"]
@@ -511,11 +537,11 @@ def _merge_unified_stats(base: dict[str, Any], bedrock: _BedrockStats) -> dict[s
                     bedrock_compression_savings_usd += compression_savings_usd
                 if cr_toks > 0 or cw_toks > 0:
                     # Cache reads bill at cache_read price (90% off) instead of input.
-                    read_savings = cr_toks * max(0.0, rec["input"] - rec["cache_read"])
+                    cache_read_savings_usd = cr_toks * max(0.0, rec["input"] - rec["cache_read"])
                     # Cache writes bill a 25% premium over input.
-                    write_premium = cw_toks * max(0.0, rec["cache_write"] - rec["input"])
-                    cache_savings_usd = read_savings - write_premium
-                    bedrock_cache_savings_usd += cache_savings_usd
+                    write_premium_usd = cw_toks * max(0.0, rec["cache_write"] - rec["input"])
+                    bedrock_cache_read_savings_usd += cache_read_savings_usd
+                    bedrock_write_premium_usd += write_premium_usd
 
             cur = _as_dict(per_model.get(display_model))
             cur["requests"] = _to_int(cur.get("requests")) + req
@@ -527,8 +553,12 @@ def _merge_unified_stats(base: dict[str, Any], bedrock: _BedrockStats) -> dict[s
             cur["compression_savings_usd"] = (
                 float(cur.get("compression_savings_usd") or 0.0) + compression_savings_usd
             )
+            # cache_savings_usd = gross read savings; write_premium_usd tracked separately.
             cur["cache_savings_usd"] = (
-                float(cur.get("cache_savings_usd") or 0.0) + cache_savings_usd
+                float(cur.get("cache_savings_usd") or 0.0) + cache_read_savings_usd
+            )
+            cur["write_premium_usd"] = (
+                float(cur.get("write_premium_usd") or 0.0) + write_premium_usd
             )
             # Recompute aggregate reduction against aggregate totals.
             total_sent = _to_int(cur.get("tokens_sent"))
@@ -541,6 +571,7 @@ def _merge_unified_stats(base: dict[str, Any], bedrock: _BedrockStats) -> dict[s
         cost_block["per_model"] = per_model
 
         # Merge Bedrock USD savings into the session cost block so the dashboard shows them.
+        # savings_usd tracks gross read savings only — never goes negative.
         if bedrock_compression_savings_usd > 0:
             cost_block["savings_usd"] = (
                 float(cost_block.get("savings_usd") or 0.0) + bedrock_compression_savings_usd
@@ -549,24 +580,29 @@ def _merge_unified_stats(base: dict[str, Any], bedrock: _BedrockStats) -> dict[s
                 float(cost_block.get("compression_savings_usd") or 0.0)
                 + bedrock_compression_savings_usd
             )
-        if bedrock_cache_savings_usd != 0:
+        if bedrock_cache_read_savings_usd > 0:
             cost_block["cache_savings_usd"] = (
-                float(cost_block.get("cache_savings_usd") or 0.0) + bedrock_cache_savings_usd
+                float(cost_block.get("cache_savings_usd") or 0.0) + bedrock_cache_read_savings_usd
             )
             cost_block["savings_usd"] = (
-                float(cost_block.get("savings_usd") or 0.0) + bedrock_cache_savings_usd
+                float(cost_block.get("savings_usd") or 0.0) + bedrock_cache_read_savings_usd
+            )
+        if bedrock_write_premium_usd > 0:
+            cost_block["write_premium_usd"] = (
+                float(cost_block.get("write_premium_usd") or 0.0) + bedrock_write_premium_usd
             )
 
         payload["cost"] = cost_block
 
-        bedrock_total_savings_usd = bedrock_compression_savings_usd + bedrock_cache_savings_usd
+        bedrock_gross_savings_usd = bedrock_compression_savings_usd + bedrock_cache_read_savings_usd
+        bedrock_net_savings_usd = bedrock_gross_savings_usd - bedrock_write_premium_usd
 
         # Merge into summary.cost so the top-level dashboard metrics also update.
         summary = _as_dict(payload.get("summary"))
         sum_cost = _as_dict(summary.get("cost"))
-        if bedrock_total_savings_usd != 0:
+        if bedrock_gross_savings_usd > 0 or bedrock_write_premium_usd > 0:
             sum_cost["total_saved_usd"] = (
-                float(sum_cost.get("total_saved_usd") or 0.0) + bedrock_total_savings_usd
+                float(sum_cost.get("total_saved_usd") or 0.0) + bedrock_net_savings_usd
             )
             breakdown = _as_dict(sum_cost.get("breakdown"))
             breakdown["compression_savings_usd"] = (
@@ -574,10 +610,13 @@ def _merge_unified_stats(base: dict[str, Any], bedrock: _BedrockStats) -> dict[s
                 + bedrock_compression_savings_usd
             )
             breakdown["cache_savings_usd"] = (
-                float(breakdown.get("cache_savings_usd") or 0.0) + bedrock_cache_savings_usd
+                float(breakdown.get("cache_savings_usd") or 0.0) + bedrock_cache_read_savings_usd
+            )
+            breakdown["write_premium_usd"] = (
+                float(breakdown.get("write_premium_usd") or 0.0) + bedrock_write_premium_usd
             )
             sum_cost["breakdown"] = breakdown
-        if bedrock_total_savings_usd != 0:
+        if bedrock_without_usd > 0:
             # Recompute without/with totals whenever any Bedrock savings occurred.
             sum_cost["without_headroom_usd"] = (
                 float(sum_cost.get("without_headroom_usd") or 0.0) + bedrock_without_usd

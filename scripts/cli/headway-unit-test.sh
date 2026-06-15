@@ -97,9 +97,22 @@ else
 fi
 rm -rf "$tmpdir"
 
-# ── 5. load_env: .env value wins over shell env ──────────────────────────────
+# ── 5. require_env: BEDROCK_AWS_PROFILE absent from .env ─────────────────────
 echo
-echo "[ Test 5: load_env — .env value takes precedence over shell env ]"
+echo "[ Test 5: require_env — BEDROCK_AWS_PROFILE not in .env ]"
+tmpdir="$(make_isolated_copy)"
+printf 'AWS_PROFILE=test-profile\nAWS_REGION=us-east-1\n' >"$tmpdir/.env"
+out="$(BEDROCK_AWS_PROFILE= "$tmpdir/headway" config setup kilo 2>&1)" && status=0 || status=$?
+if [[ "$status" -ne 0 ]] && echo "$out" | grep -q "ERROR:.*BEDROCK_AWS_PROFILE"; then
+  ok "missing BEDROCK_AWS_PROFILE → exit $status with correct error"
+else
+  fail "missing BEDROCK_AWS_PROFILE → exit $status, output: $out"
+fi
+rm -rf "$tmpdir"
+
+# ── 6. load_env: .env value wins over shell env ──────────────────────────────
+echo
+echo "[ Test 6: load_env — .env value takes precedence over shell env ]"
 tmpdir="$(make_isolated_copy)"
 printf 'AWS_PROFILE=from-env-file\nAWS_REGION=eu-central-1\n' >"$tmpdir/.env"
 out="$(AWS_PROFILE=from-shell "$tmpdir/headway" config show 2>&1)"
@@ -110,9 +123,9 @@ else
 fi
 rm -rf "$tmpdir"
 
-# ── 6. load_env: shell env var unset when no .env ────────────────────────────
+# ── 7. load_env: shell env var unset when no .env ────────────────────────────
 echo
-echo "[ Test 6: load_env — shell env cleared when .env absent ]"
+echo "[ Test 7: load_env — shell env cleared when .env absent ]"
 tmpdir="$(make_isolated_copy)"
 out="$(AWS_PROFILE=from-shell "$tmpdir/headway" config show 2>&1)"
 if echo "$out" | grep -q "AWS_PROFILE=<unset>"; then
@@ -122,9 +135,9 @@ else
 fi
 rm -rf "$tmpdir"
 
-# ── 7. cleanup: invalid target is rejected ───────────────────────────────────
+# ── 8. cleanup: invalid target is rejected ───────────────────────────────────
 echo
-echo "[ Test 7: cleanup — invalid target rejected ]"
+echo "[ Test 8: cleanup — invalid target rejected ]"
 out="$("$HEADWAY" cleanup bogus 2>&1)" && status=0 || status=$?
 if [[ "$status" -ne 0 ]] && echo "$out" | grep -q "Unknown cleanup arg"; then
   ok "cleanup bogus → exit $status with correct error"
