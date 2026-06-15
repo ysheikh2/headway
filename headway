@@ -541,6 +541,14 @@ wait_for_copilot_auth() {
     if [[ -n "$code" && "$code" != "$last_code" ]]; then
       echo "  Current code: $code  →  https://github.com/login/device"
       last_code="$code"
+      # On macOS: copy code to clipboard and open the auth page automatically.
+      if command -v pbcopy >/dev/null 2>&1; then
+        printf '%s' "$code" | pbcopy
+        echo "  (code copied to clipboard)"
+      fi
+      if command -v open >/dev/null 2>&1; then
+        open "https://github.com/login/device" 2>/dev/null || true
+      fi
     fi
     sleep 5
     elapsed=$((elapsed + 5))
