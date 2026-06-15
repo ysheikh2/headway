@@ -13,7 +13,7 @@ echo "=== Secret Scan ==="
 echo
 
 echo "[1/2] Pattern scan"
-PATTERN_HITS=$(grep -RInE '(AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z\-_]{35}|-----BEGIN (RSA|EC|OPENSSH|PRIVATE) KEY-----|(password|secret|api[_-]?key|token)\s*=\s*["'"'"'])' . --exclude-dir=.data --exclude-dir=.git --exclude-dir=.kilo --exclude-dir=.playwright-mcp --exclude=litellm_config.yaml || true)
+PATTERN_HITS=$(grep -RInE '(AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|-----BEGIN (RSA|EC|OPENSSH|PRIVATE) KEY-----|(password|secret|api[_-]?key|token)\s*=\s*["'"'"'])' . --exclude-dir=.data --exclude-dir=.git --exclude-dir=.kilo --exclude-dir=.playwright-mcp --exclude=litellm_config.yaml || true)
 if [[ -n "$PATTERN_HITS" ]]; then
   echo "$PATTERN_HITS"
   PATTERN_FAIL=1
