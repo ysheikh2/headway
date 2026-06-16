@@ -70,12 +70,15 @@ jobs:
 
       - name: Build PR body
         if: steps.changes.outputs.has_changes == 'true'
+        env:
+          UPSTREAM_REF: ${{ steps.upstream.outputs.ref }}
         run: |
           set -euo pipefail
+          bt='`'
           {
-            printf 'Automated dashboard sync from upstream Headroom (`%s`).\n\n' "${{ steps.upstream.outputs.ref }}"
-            printf -- '- **Dashboard template**: upstream dashboard changed; local patches re-applied and validated.\n\n'
-            printf 'This PR is safe to merge when CI passes.\n'
+            printf 'Automated dashboard sync from upstream Headroom (%s%s%s).\n\n' "$bt" "$UPSTREAM_REF" "$bt"
+            printf '%s\n\n' '- **Dashboard template**: upstream dashboard changed; local patches re-applied and validated.'
+            printf '%s\n' 'This PR is safe to merge when CI passes.'
           } > /tmp/pr-body.txt
 
       - name: Create pull request

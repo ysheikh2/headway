@@ -693,7 +693,7 @@ elif 'output' in d:
         fail "Bedrock :4002 converse had envelope parse error for request $CONVERSE_REQ_ID"
       elif [[ $CONVERSE_EXPECT_ANTHROPIC_COMPRESS -eq 1 ]] && bedrock_log_has_for_request "$CONVERSE_REQ_ID" '"event":"bedrock_compression_skipped"'; then
         fail "Bedrock :4002 converse skipped compression for anthropic request $CONVERSE_REQ_ID"
-        info "Check vendor detection path in Bedrock native image"
+        info "Check vendor detection path in the native bedrock proxy"
       else
         ok "Bedrock :4002 converse did not report compression skip/parse errors"
       fi

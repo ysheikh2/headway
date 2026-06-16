@@ -77,9 +77,11 @@ jobs:
           repo="${{ github.event.inputs.headroom_source_repo || env.HEADROOM_SOURCE_REPO }}"
           ref="${{ github.event.inputs.headroom_source_ref || env.HEADROOM_SOURCE_REF }}"
           base="${{ github.event.inputs.headroom_code_image || env.HEADROOM_CODE_IMAGE }}"
-          printf 'repo=%s\n' "$repo" >> "$GITHUB_OUTPUT"
-          printf 'ref=%s\n' "$ref" >> "$GITHUB_OUTPUT"
-          printf 'base=%s\n' "$base" >> "$GITHUB_OUTPUT"
+          {
+            printf 'repo=%s\n' "$repo"
+            printf 'ref=%s\n' "$ref"
+            printf 'base=%s\n' "$base"
+          } >> "$GITHUB_OUTPUT"
           echo "Building binary from $repo @ $ref, layered onto $base"
 
       - name: Set up Docker Buildx
