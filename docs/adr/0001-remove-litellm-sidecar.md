@@ -7,7 +7,7 @@
 
 Headway currently runs three containers for two proxy lanes:
 
-```
+```text
 Kilo/client → headroom :4000 → litellm :4001 → GitHub Copilot   (Copilot lane)
 Kilo/client → headroom :4002 → headroom-proxy (SigV4) → Bedrock  (Bedrock lane)
 ```
@@ -33,7 +33,7 @@ natively using its built-in provider.
 
 The Copilot lane becomes:
 
-```
+```text
 Kilo/client → headroom :4000 → GitHub Copilot   (Copilot lane)
 Kilo/client → headroom :4002 → headroom-proxy → Bedrock  (Bedrock lane)
 ```
