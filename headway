@@ -37,7 +37,8 @@ load_env() {
   # silently inherited from the outer shell environment.
   unset AWS_PROFILE AWS_REGION BEDROCK_AWS_PROFILE BEDROCK_DISCOVERY_AWS_PROFILE \
     HEADROOM_IMAGE HEADROOM_COMPRESS_USER_MESSAGES HEADROOM_MIN_TOKENS \
-    HEADROOM_PROTECT_RECENT HEADWAY_BEDROCK_AUTO_CACHE_CONTROL
+    HEADROOM_PROTECT_RECENT HEADWAY_BEDROCK_AUTO_CACHE_CONTROL \
+    HEADWAY_BEDROCK_DEBUG_COMPRESS
   if [[ -f "$ENV_FILE" ]]; then
     set -o allexport
     # shellcheck source=/dev/null
@@ -1226,6 +1227,7 @@ cmd_reset() {
 }
 
 cmd_cleanup() {
+  load_env
   local target="${1:-}"
   local yes="false"
 
@@ -1308,6 +1310,7 @@ cmd_cleanup() {
 }
 
 cmd_uninstall() {
+  load_env
   local yes="false"
 
   while [[ $# -gt 0 ]]; do
