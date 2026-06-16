@@ -203,7 +203,7 @@ fi
   echo "BEDROCK_AWS_PROFILE=$AWS_PROFILE"
   echo "BEDROCK_DISCOVERY_AWS_PROFILE=$AWS_PROFILE"
   echo "AWS_REGION=$AWS_REGION"
-  echo "HEADROOM_IMAGE=ghcr.io/ysheikh2/headway:headroom-bundled"
+  echo "HEADROOM_IMAGE=ghcr.io/chopratejas/headroom:code"
   echo "HEADROOM_COMPRESS_USER_MESSAGES=1"
   echo "HEADROOM_MIN_TOKENS=120"
   echo "HEADROOM_PROTECT_RECENT=2"

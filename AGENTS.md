@@ -62,17 +62,10 @@ When debugging provider failures, test Copilot/OpenAI-compatible and Bedrock-nat
 
 ## CI / Docker Build Triggers
 
-The `docker-headroom-bundled` workflow builds and pushes `HEADROOM_IMAGE` — the
-upstream `chopratejas/headroom:code` proxy with the native `headroom-proxy` binary
-layered on top (`Dockerfile.headroom-bundled`). Both the `headroom` and
-`headroom-bedrock` compose services run from this single image. It fires on push to
-`main` when `Dockerfile.headroom-bundled` or its workflow change, and can be run
-manually via GitHub Actions → Docker Headroom Bundled → Run workflow.
-
-This image is a **stopgap**: upstream headroom #999 already bundles the binary in its
-published images, but the publish that would have carried it failed transiently. Once
-upstream `:code` ships the binary, delete `Dockerfile.headroom-bundled` and its
-workflow and point `HEADROOM_IMAGE` straight at `ghcr.io/chopratejas/headroom:code`.
+Both `headroom` and `headroom-bedrock` compose services run from `HEADROOM_IMAGE`
+(`ghcr.io/chopratejas/headroom:code`). The upstream `:code` image ships the native
+`headroom-proxy` binary (headroom #999); the bedrock service overrides the entrypoint
+to run it. No headway-side Docker build workflow is required.
 
 The native bedrock proxy emits Bedrock EventStream framing because `bedrock_native_patch`
 sets `Accept: application/vnd.amazon.eventstream` on streaming forwards — no source patch

@@ -25,7 +25,7 @@ PY_HELPER="$ROOT_DIR/scripts/cli/headroom_python.py"
 
 DEFAULT_AWS_REGION="eu-central-1"
 DEFAULT_AWS_PROFILE="default"
-DEFAULT_HEADROOM_IMAGE="ghcr.io/ysheikh2/headway:headroom-bundled"
+DEFAULT_HEADROOM_IMAGE="ghcr.io/chopratejas/headroom:code"
 ENV_TEMPLATE_FILE="$ROOT_DIR/.env.template"
 
 GATEWAY_URL="http://127.0.0.1:4000"

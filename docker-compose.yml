@@ -5,13 +5,9 @@
 #   Kilo (Bedrock)  -> Headroom :4002 -> headroom-proxy (SigV4) -> AWS Bedrock
 #
 # Both the Python proxy (headroom) and the native bedrock proxy (headroom-bedrock)
-# run from a SINGLE image, HEADROOM_IMAGE. Headroom #999 bundles the native
-# `headroom-proxy` binary in its images, but the publish that would have landed
-# it in :code failed transiently, so HEADROOM_IMAGE currently points at a
-# stopgap bundled image (ghcr.io/ysheikh2/headway:headroom-bundled). Once
-# upstream :code ships the binary, point HEADROOM_IMAGE at it and drop the
-# stopgap. The bedrock service just runs a different entrypoint from the same
-# image. The native proxy emits Bedrock EventStream framing because
+# run from a SINGLE image, HEADROOM_IMAGE. Upstream headroom :code bundles the
+# native `headroom-proxy` binary; the bedrock service just overrides the
+# entrypoint. The native proxy emits Bedrock EventStream framing because
 # bedrock_native_patch sets the matching Accept header on streaming forwards.
 # Runtime state is persisted in-repo under .data/ (gitignored).
 # Headroom state is intentionally shared across :4000 and :4002 lanes.
@@ -47,7 +43,7 @@ services:
       start_period: 30s
 
   headroom:
-    image: ${HEADROOM_IMAGE:-ghcr.io/ysheikh2/headway:headroom-bundled}
+    image: ${HEADROOM_IMAGE:-ghcr.io/chopratejas/headroom:code}
     container_name: headroom-gateway
     restart: unless-stopped
     ports:
@@ -94,7 +90,7 @@ services:
       - ./scripts/runtime/headroom/dashboard.html:/usr/local/lib/python3.13/site-packages/headroom/dashboard/templates/dashboard.html:ro
 
   headroom-bedrock:
-    image: ${HEADROOM_IMAGE:-ghcr.io/ysheikh2/headway:headroom-bundled}
+    image: ${HEADROOM_IMAGE:-ghcr.io/chopratejas/headroom:code}
     container_name: headroom-bedrock-gateway
     restart: unless-stopped
     # Same image as the headroom service; run the native Rust proxy instead of
