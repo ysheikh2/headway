@@ -5,7 +5,7 @@ env:
 
 "on":
   schedule:
-    - cron: "23 4 * * *"
+    - cron: "23 4 * * 1"
   workflow_dispatch:
     inputs:
       upstream_ref:
