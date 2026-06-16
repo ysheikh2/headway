@@ -266,7 +266,8 @@ run_init_questionnaire_if_needed() {
   echo "A few quick questions to set up your .env (press Enter to accept defaults — defaults are fine for most fields)."
   echo
 
-  local aws_profile="$(get_env_key "AWS_PROFILE")"
+  local aws_profile
+  aws_profile="$(get_env_key "AWS_PROFILE")"
   # Use fd 3 for the key iterator so that read -r -p inside prompt_with_default
   # keeps reading from stdin (the terminal) rather than from the key stream.
   while IFS= read -r key <&3; do
@@ -1234,7 +1235,6 @@ cmd_cleanup() {
   local yes="false"
 
   # Allow --yes before or after the target
-  local args=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --yes)
