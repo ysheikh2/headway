@@ -73,6 +73,6 @@ The native bedrock proxy emits Bedrock EventStream framing because `bedrock_nati
 sets `Accept: application/vnd.amazon.eventstream` on streaming forwards — no source patch
 to the binary is required.
 
-The `sync-upstream-headroom` workflow runs daily and auto-creates a PR when the upstream
+The `sync-upstream-headroom` workflow runs weekly (Mondays) and auto-creates a PR when the upstream
 dashboard template changes. GitHub Actions is permitted to create PRs in this repo
 (`can_approve_pull_request_reviews: true` is set at the repo level).

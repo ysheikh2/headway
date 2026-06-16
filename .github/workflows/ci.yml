@@ -204,6 +204,8 @@ jobs:
           AWS_PROFILE: ci-render-placeholder
           BEDROCK_AWS_PROFILE: ci-render-placeholder
           AWS_REGION: us-east-1
+          # Include the litellm profile so the optional service is validated too.
+          COMPOSE_PROFILES: litellm
         run: docker compose -f docker-compose.yml config > /tmp/compose.rendered.yaml
 
       - name: Secret scan
