@@ -40,22 +40,29 @@ jobs:
 
       - name: Resolve upstream ref
         id: upstream
+        env:
+          INPUT_UPSTREAM_REF: ${{ github.event.inputs.upstream_ref || 'main' }}
         run: |
           set -euo pipefail
-          ref="${{ github.event.inputs.upstream_ref || 'main' }}"
+          ref="$INPUT_UPSTREAM_REF"
+          [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "Invalid upstream_ref"; exit 1; }
           printf 'ref=%s\n' "$ref" >> "$GITHUB_OUTPUT"
 
       - name: Sync dashboard from upstream and apply patch
+        env:
+          UPSTREAM_REF: ${{ steps.upstream.outputs.ref }}
         run: |
           set -euo pipefail
           python scripts/runtime/headroom/sync_dashboard.py \
-            --url "https://raw.githubusercontent.com/chopratejas/headroom/${{ steps.upstream.outputs.ref }}/headroom/dashboard/templates/dashboard.html"
+            --url "https://raw.githubusercontent.com/chopratejas/headroom/${UPSTREAM_REF}/headroom/dashboard/templates/dashboard.html"
 
       - name: Validate dashboard patch invariants
+        env:
+          UPSTREAM_REF: ${{ steps.upstream.outputs.ref }}
         run: |
           set -euo pipefail
           python scripts/runtime/headroom/sync_dashboard.py \
-            --url "https://raw.githubusercontent.com/chopratejas/headroom/${{ steps.upstream.outputs.ref }}/headroom/dashboard/templates/dashboard.html" \
+            --url "https://raw.githubusercontent.com/chopratejas/headroom/${UPSTREAM_REF}/headroom/dashboard/templates/dashboard.html" \
             --check
 
       - name: Detect changes

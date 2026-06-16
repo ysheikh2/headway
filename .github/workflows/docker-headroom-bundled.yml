@@ -73,10 +73,18 @@ jobs:
 
       - name: Resolve source repo/ref/base
         id: source
+        env:
+          INPUT_REPO: ${{ github.event.inputs.headroom_source_repo || env.HEADROOM_SOURCE_REPO }}
+          INPUT_REF: ${{ github.event.inputs.headroom_source_ref || env.HEADROOM_SOURCE_REF }}
+          INPUT_BASE: ${{ github.event.inputs.headroom_code_image || env.HEADROOM_CODE_IMAGE }}
         run: |
-          repo="${{ github.event.inputs.headroom_source_repo || env.HEADROOM_SOURCE_REPO }}"
-          ref="${{ github.event.inputs.headroom_source_ref || env.HEADROOM_SOURCE_REF }}"
-          base="${{ github.event.inputs.headroom_code_image || env.HEADROOM_CODE_IMAGE }}"
+          set -euo pipefail
+          repo="$INPUT_REPO"
+          ref="$INPUT_REF"
+          base="$INPUT_BASE"
+          [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "Invalid repo"; exit 1; }
+          [[ "$ref"  =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "Invalid ref"; exit 1; }
+          [[ "$base" =~ ^[A-Za-z0-9./:@_-]+$ ]] || { echo "Invalid base image"; exit 1; }
           {
             printf 'repo=%s\n' "$repo"
             printf 'ref=%s\n' "$ref"
