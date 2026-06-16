@@ -10,8 +10,10 @@ Product/runtime usage details live in `README.md` and should not be duplicated h
 
 ## Repo Intent
 
-Headway is an integration/operations wrapper around upstream Headroom + LiteLLM,
-with a dedicated native Bedrock lane.
+Headway is an integration/operations wrapper around upstream Headroom, providing
+a two-lane AI gateway: OpenAI-compatible (Copilot) via Headroom + LiteLLM, and
+Bedrock-native via headroom-proxy. See `docs/adr/` for architecture decisions,
+including the planned removal of the LiteLLM sidecar (ADR-0001).
 
 ## Non-Negotiable Rules
 
@@ -44,7 +46,7 @@ When debugging provider failures, test Copilot/OpenAI-compatible and Bedrock-nat
 - `headway` — main CLI script
 - `install.sh` — one-line installer (clones repo, symlinks `headway`, sets up shell completion)
 - `docker-compose.yml`
-- `litellm_config.yaml`
+- `litellm_config.yaml` — LiteLLM model/provider config (Copilot lane; see ADR-0001 for planned removal)
 - `scripts/cli/headroom_python.py` — shared Python helpers for CLI commands
 - `scripts/cli/generate-litellm-config.sh` — Bedrock model discovery and config generation
 - `scripts/cli/headway-completion.bash` — bash/zsh tab-completion script (sourced at init time)
@@ -62,17 +64,10 @@ When debugging provider failures, test Copilot/OpenAI-compatible and Bedrock-nat
 
 ## CI / Docker Build Triggers
 
-The `docker-headroom-bundled` workflow builds and pushes `HEADROOM_IMAGE` — the
-upstream `chopratejas/headroom:code` proxy with the native `headroom-proxy` binary
-layered on top (`Dockerfile.headroom-bundled`). Both the `headroom` and
-`headroom-bedrock` compose services run from this single image. It fires on push to
-`main` when `Dockerfile.headroom-bundled` or its workflow change, and can be run
-manually via GitHub Actions → Docker Headroom Bundled → Run workflow.
-
-This image is a **stopgap**: upstream headroom #999 already bundles the binary in its
-published images, but the publish that would have carried it failed transiently. Once
-upstream `:code` ships the binary, delete `Dockerfile.headroom-bundled` and its
-workflow and point `HEADROOM_IMAGE` straight at `ghcr.io/chopratejas/headroom:code`.
+Both `headroom` and `headroom-bedrock` compose services run from `HEADROOM_IMAGE`
+(`ghcr.io/chopratejas/headroom:code`). The upstream `:code` image ships the native
+`headroom-proxy` binary (headroom #999); the bedrock service overrides the entrypoint
+to run it. No headway-side Docker build workflow is required.
 
 The native bedrock proxy emits Bedrock EventStream framing because `bedrock_native_patch`
 sets `Accept: application/vnd.amazon.eventstream` on streaming forwards — no source patch

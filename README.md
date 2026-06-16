@@ -231,11 +231,10 @@ Runtime state lives under this repo (gitignored):
 ## Images
 
 - LiteLLM (Copilot lane): `ghcr.io/berriai/litellm:main-stable`
-- Headroom: `ghcr.io/ysheikh2/headway:headroom-bundled` (override with `HEADROOM_IMAGE` in `.env`)
+- Headroom: `ghcr.io/chopratejas/headroom:code` (override with `HEADROOM_IMAGE` in `.env`)
   — one image runs both the Python proxy (`:4000`/`:4002`) and the native bedrock
-  proxy. It bundles the upstream `chopratejas/headroom:code` proxy plus the native
-  `headroom-proxy` binary. Once upstream `:code` ships the binary itself, point
-  `HEADROOM_IMAGE` at `ghcr.io/chopratejas/headroom:code` and drop the bundled-image workflow.
+  proxy (`headroom-proxy`). The upstream `:code` image ships the binary; the bedrock
+  service overrides the entrypoint to `headroom-proxy`.
 
 ## Uninstall and Cleanup
 
