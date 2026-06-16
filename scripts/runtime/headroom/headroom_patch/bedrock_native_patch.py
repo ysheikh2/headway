@@ -1015,16 +1015,18 @@ async def _forward_request(
     upstream_base: str,
     body: bytes,
     stream: bool,
+    outbound_path: str | None = None,
     on_stream_complete=None,
 ):
     """Forward to the Bedrock gateway.
 
-    For streaming responses, ``on_stream_complete(output_tokens, status_code)``
-    is invoked after the stream is fully consumed so the caller can record
+    ``outbound_path`` overrides the upstream request path (defaults to the
+    inbound path). For streaming responses, ``on_stream_complete(...)`` is
+    invoked after the stream is fully consumed so the caller can record
     output-token stats (which are only known once the stream ends).
     """
     query = request.url.query
-    url = f"{upstream_base.rstrip('/')}{request.url.path}"
+    url = f"{upstream_base.rstrip('/')}{outbound_path or request.url.path}"
     if query:
         url = f"{url}?{query}"
 
@@ -1347,6 +1349,16 @@ def apply_patch() -> None:
                     pass  # compression is optional; forward original body
 
             is_stream = _is_streaming_action(action)
+            # The non-streaming converse path emits InvokeModel-format bodies
+            # (_anthropic_messages_to_bedrock with prefer_bedrock_blocks off,
+            # plus InvokeModel system/inferenceConfig normalization), so route
+            # them to the InvokeModel endpoint. Upstream headroom #999 routes
+            # /converse natively and would reject InvokeModel blocks; the
+            # converse-stream path already emits Converse-native blocks and
+            # keeps its native /converse-stream route.
+            outbound_path = request.url.path
+            if action == "converse" and outbound_path.endswith("/converse"):
+                outbound_path = outbound_path[: -len("/converse")] + "/invoke"
             try:
                 # For streaming, output/cache tokens are only known once the
                 # stream is fully consumed; defer into the callback.
@@ -1371,6 +1383,7 @@ def apply_patch() -> None:
                     upstream_base=BEDROCK_UPSTREAM,
                     body=body_bytes,
                     stream=is_stream,
+                    outbound_path=outbound_path,
                     on_stream_complete=_on_stream_complete if is_stream else None,
                 )
                 if is_stream:
