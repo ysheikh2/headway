@@ -534,7 +534,10 @@ wait_for_copilot_auth() {
   local elapsed=0
   local last_code=""
   local logs_since
-  logs_since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  # secs_without_code counts how long we've gone since the last restart without
+  # seeing any device code in logs. Used as a fallback exhaustion signal when
+  # the explicit "Failed" message is older than logs_since (see bootstrap below).
+  local secs_without_code=0
 
   if ! copilot_auth_pending; then
     return 0
@@ -543,53 +546,107 @@ wait_for_copilot_auth() {
   echo
   echo "Copilot device auth required. You have up to $((timeout / 60)) minutes."
   echo "  1. Visit   https://github.com/login/device"
-  echo "  2. Enter   the code shown below (refreshes every ~60s if not used)"
+  echo "  2. Enter   the code shown below (updates automatically)"
   echo
 
+  # ── Bootstrap: ensure litellm has an active auth session ────────────────────
+  #
+  # litellm makes exactly 3 device-code attempts (~60 s each), then stops.
+  # If 'headway auth' is called *after* those 3 attempts have already been
+  # exhausted, every signal we use is stale: the failure message predates
+  # logs_since, no new codes appear, and the loop spins silently forever.
+  #
+  # Fix: inspect the *container's own session* (logs since its start time) to
+  # decide whether an active auth window exists before we enter the loop.
+  # Restart immediately if the session is already done so the user gets a live
+  # code right away instead of waiting for the silent-timeout fallback.
+  local container_started_at
+  container_started_at="$(docker inspect --format='{{.State.StartedAt}}' \
+    litellm-gateway 2>/dev/null || true)"
+  local session_scope="${container_started_at:-1970-01-01T00:00:00Z}"
+
+  local session_exhausted=false
+  # No code at all in this container session → hasn't started a Copilot auth
+  # flow yet (started without config, or startup hasn't reached it).
+  if [[ -z "$(copilot_current_code "$session_scope")" ]]; then
+    session_exhausted=true
+  # Codes were issued but the explicit failure message is present → all 3
+  # windows expired before the user could enter a code.
+  elif docker logs --since "$session_scope" litellm-gateway 2>/dev/null |
+      grep -q "Failed to get access token after 3 attempts"; then
+    session_exhausted=true
+  fi
+
+  if $session_exhausted; then
+    echo "  Starting a fresh auth session..."
+    docker compose -f "$COMPOSE_FILE" restart litellm 2>/dev/null || true
+    logs_since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    sleep 8
+  else
+    # Active session: scope code lookups to the container start so codes
+    # already visible in logs are shown on the first iteration.
+    logs_since="$session_scope"
+  fi
+
+  # ── Main polling loop ────────────────────────────────────────────────────────
   while [[ $elapsed -lt $timeout ]]; do
     if ! copilot_auth_pending; then
+      echo
       echo "  Copilot auth complete."
       return 0
     fi
 
-    # LiteLLM only makes 3 device-code attempts (~60s each) before giving up.
-    # When exhausted, no new codes are issued and the token file is never written.
-    # Use --since to check only logs after the last restart so stale entries
-    # from a prior exhaustion don't trigger an immediate second restart.
+    # Detect that litellm has exhausted its auth window and needs a restart.
+    # Two independent signals cover all cases:
+    #
+    # Signal A — explicit: litellm logs "Failed to get access token after 3
+    #   attempts" once it has tried all 3 device codes. Reliable when litellm
+    #   was restarted inside this loop (because logs_since was just updated).
+    #
+    # Signal B — silent-timeout fallback: if no code has appeared for 90 s
+    #   since the last restart, litellm has quietly given up. 90 s > 3 × 5 s
+    #   poll interval + startup jitter; it will never fire during normal cycling
+    #   because each new code resets secs_without_code to 0.
+    local needs_restart=false
     if docker logs --since "$logs_since" litellm-gateway 2>/dev/null |
-      grep -q "Failed to get access token after 3 attempts"; then
+        grep -q "Failed to get access token after 3 attempts"; then
+      needs_restart=true  # Signal A
+    elif [[ -z "$last_code" && $secs_without_code -ge 90 ]]; then
+      needs_restart=true  # Signal B
+    fi
+
+    if $needs_restart; then
       echo
-      echo "  LiteLLM auth window expired — restarting to issue a fresh code..."
+      echo "  Auth window closed — getting a fresh code automatically..."
       docker compose -f "$COMPOSE_FILE" restart litellm 2>/dev/null || true
       logs_since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-      sleep 8
+      secs_without_code=0
       last_code=""
+      sleep 8
+      # Don't charge elapsed for the restart sleep — we want the full timeout
+      # available to the user regardless of how many restarts are needed.
       continue
     fi
 
     local code
-    code=$(copilot_current_code "$logs_since")
+    code="$(copilot_current_code "$logs_since")"
     if [[ -n "$code" && "$code" != "$last_code" ]]; then
-      echo "  Current code: $code  →  https://github.com/login/device"
+      secs_without_code=0
       last_code="$code"
-      # Copy code to clipboard (macOS / Linux X11 / Linux Wayland / WSL2).
+      printf '\n  Code: \033[1;32m%s\033[0m  →  https://github.com/login/device\n' "$code"
+      # Copy to clipboard on whatever platform is available.
       if command -v pbcopy >/dev/null 2>&1; then
-        printf '%s' "$code" | pbcopy
-        echo "  (code copied to clipboard)"
+        printf '%s' "$code" | pbcopy && echo "  (copied to clipboard)"
       elif command -v clip.exe >/dev/null 2>&1; then
-        printf '%s' "$code" | clip.exe
-        echo "  (code copied to clipboard)"
+        printf '%s' "$code" | clip.exe && echo "  (copied to clipboard)"
       elif command -v wl-copy >/dev/null 2>&1; then
-        printf '%s' "$code" | wl-copy
-        echo "  (code copied to clipboard)"
+        printf '%s' "$code" | wl-copy && echo "  (copied to clipboard)"
       elif command -v xclip >/dev/null 2>&1; then
-        printf '%s' "$code" | xclip -selection clipboard
-        echo "  (code copied to clipboard)"
+        printf '%s' "$code" | xclip -selection clipboard && echo "  (copied to clipboard)"
       elif command -v xsel >/dev/null 2>&1; then
-        printf '%s' "$code" | xsel --clipboard --input
-        echo "  (code copied to clipboard)"
+        printf '%s' "$code" | xsel --clipboard --input && echo "  (copied to clipboard)"
       fi
-      # Open the auth page in the default browser.
+      # Open the browser so the user only needs to paste and click Confirm.
       if command -v open >/dev/null 2>&1; then
         open "https://github.com/login/device" 2>/dev/null || true
       elif command -v xdg-open >/dev/null 2>&1; then
@@ -598,12 +655,18 @@ wait_for_copilot_auth() {
         cmd.exe /c start "https://github.com/login/device" 2>/dev/null || true
       fi
     fi
+
     sleep 5
     elapsed=$((elapsed + 5))
+    # Only count time-without-code while no code has been displayed yet.
+    # Once a code appears we rely on Signal A (explicit failure) to detect
+    # exhaustion, because secs_without_code is no longer meaningful.
+    [[ -z "$last_code" ]] && secs_without_code=$((secs_without_code + 5))
   done
 
-  echo "ERROR: Copilot auth timed out after ${timeout}s."
-  echo "       Re-run: headway auth"
+  echo
+  echo "ERROR: Copilot auth timed out after $((timeout / 60)) minutes."
+  echo "       Run: headway auth"
   return 1
 }
 
