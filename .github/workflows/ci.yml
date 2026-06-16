@@ -27,7 +27,6 @@ jobs:
       python: ${{ steps.filter.outputs.python }}
       yaml: ${{ steps.filter.outputs.yaml }}
       dashboard: ${{ steps.filter.outputs.dashboard }}
-      compat: ${{ steps.filter.outputs.compat }}
       relevant: ${{ steps.filter.outputs.relevant }}
 
     steps:
@@ -49,8 +48,6 @@ jobs:
               - '**/*.yaml'
             dashboard:
               - 'scripts/runtime/headroom/dashboard.html'
-            compat:
-              - 'scripts/build/headroom_upstream/upstream_patch_compat.json'
             relevant:
               - '**'
               - '!LICENSE'
@@ -233,29 +230,6 @@ jobs:
           set -euo pipefail
           python scripts/runtime/headroom/sync_dashboard.py --check
 
-  compat-check:
-    name: Upstream patch compat validation
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    needs: detect-changes
-    if: needs.detect-changes.outputs.compat == 'true'
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6.0.3
-
-      - name: Set up Python
-        uses: actions/setup-python@v6.2.0
-        with:
-          python-version: "3.12"
-
-      - name: Validate patch applies to upstream main
-        run: |
-          set -euo pipefail
-          python scripts/build/headroom_upstream/check_upstream_patch_compat.py \
-            --repo chopratejas/headroom \
-            --ref main
-
   autofix:
     name: Auto-fix formatting
     runs-on: ubuntu-latest
@@ -351,7 +325,6 @@ jobs:
       - yaml-actions-checks
       - compose-security-checks
       - dashboard-check
-      - compat-check
       - autofix
     if: always()
 
@@ -388,8 +361,4 @@ jobs:
 
           if [ "${{ needs.detect-changes.outputs.dashboard }}" == "true" ]; then
             [[ "${{ needs.dashboard-check.result }}" == "success" ]]
-          fi
-
-          if [ "${{ needs.detect-changes.outputs.compat }}" == "true" ]; then
-            [[ "${{ needs.compat-check.result }}" == "success" ]]
           fi

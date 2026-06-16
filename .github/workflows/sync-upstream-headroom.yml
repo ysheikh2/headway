@@ -1,4 +1,4 @@
-name: Sync Upstream Headroom
+name: Sync Upstream Dashboard
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -20,13 +20,12 @@ concurrency:
 permissions:
   contents: write
   pull-requests: write
-  actions: write
 
 jobs:
   sync:
-    name: Sync upstream patch compat and dashboard
+    name: Sync upstream dashboard template
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
@@ -39,99 +38,55 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo registry + git + target
-        uses: actions/cache@v4.3.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            /tmp/headroom-upstream-target
-          key: upstream-compat-${{ runner.os }}-${{ github.workflow }}-${{ github.ref_name }}
-          restore-keys: |
-            upstream-compat-${{ runner.os }}-${{ github.workflow }}-
-            upstream-compat-${{ runner.os }}-
-
       - name: Resolve upstream ref
         id: upstream
+        env:
+          INPUT_UPSTREAM_REF: ${{ github.event.inputs.upstream_ref || 'main' }}
         run: |
           set -euo pipefail
-          ref="${{ github.event.inputs.upstream_ref || 'main' }}"
+          ref="$INPUT_UPSTREAM_REF"
+          [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "Invalid upstream_ref"; exit 1; }
           printf 'ref=%s\n' "$ref" >> "$GITHUB_OUTPUT"
 
-      - name: Check patch compatibility and refresh record
-        env:
-          CARGO_TARGET_DIR: /tmp/headroom-upstream-target
-        run: |
-          set -euo pipefail
-          python scripts/build/headroom_upstream/check_upstream_patch_compat.py \
-            --repo chopratejas/headroom \
-            --ref "${{ steps.upstream.outputs.ref }}" \
-            --cargo-check \
-            --record-path scripts/build/headroom_upstream/upstream_patch_compat.json
-
       - name: Sync dashboard from upstream and apply patch
+        env:
+          UPSTREAM_REF: ${{ steps.upstream.outputs.ref }}
         run: |
           set -euo pipefail
           python scripts/runtime/headroom/sync_dashboard.py \
-            --url "https://raw.githubusercontent.com/chopratejas/headroom/${{ steps.upstream.outputs.ref }}/headroom/dashboard/templates/dashboard.html"
+            --url "https://raw.githubusercontent.com/chopratejas/headroom/${UPSTREAM_REF}/headroom/dashboard/templates/dashboard.html"
 
       - name: Validate dashboard patch invariants
+        env:
+          UPSTREAM_REF: ${{ steps.upstream.outputs.ref }}
         run: |
           set -euo pipefail
           python scripts/runtime/headroom/sync_dashboard.py \
-            --url "https://raw.githubusercontent.com/chopratejas/headroom/${{ steps.upstream.outputs.ref }}/headroom/dashboard/templates/dashboard.html" \
+            --url "https://raw.githubusercontent.com/chopratejas/headroom/${UPSTREAM_REF}/headroom/dashboard/templates/dashboard.html" \
             --check
-
-      - name: Python compile checks
-        run: |
-          set -euo pipefail
-          python -m py_compile \
-            scripts/build/headroom_upstream/check_upstream_patch_compat.py \
-            scripts/build/headroom_upstream/patch_headroom_upstream.py \
-            scripts/runtime/headroom/sync_dashboard.py
 
       - name: Detect changes
         id: changes
         run: |
           set -euo pipefail
-          if git diff --quiet -- scripts/build/headroom_upstream/upstream_patch_compat.json; then
-            echo "compat_changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "compat_changed=true" >> "$GITHUB_OUTPUT"
-          fi
           if git diff --quiet -- scripts/runtime/headroom/dashboard.html; then
-            echo "dashboard_changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "dashboard_changed=true" >> "$GITHUB_OUTPUT"
-          fi
-          if git diff --quiet -- \
-              scripts/build/headroom_upstream/upstream_patch_compat.json \
-              scripts/runtime/headroom/dashboard.html; then
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
           else
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build PR body
-        id: pr-body
         if: steps.changes.outputs.has_changes == 'true'
+        env:
+          UPSTREAM_REF: ${{ steps.upstream.outputs.ref }}
         run: |
           set -euo pipefail
-          body="Automated sync from upstream Headroom (\`${{ steps.upstream.outputs.ref }}\`)."$'\n\n'
-          if [[ "${{ steps.changes.outputs.compat_changed }}" == "true" ]]; then
-            sha="$(python -c "import json; d=json.load(open('scripts/build/headroom_upstream/upstream_patch_compat.json')); print(d['resolved_sha'][:12])")"
-            body+="- **Patch compat record**: upstream advanced to \`${sha}\`; patch still applies and cargo check passes."$'\n'
-          fi
-          if [[ "${{ steps.changes.outputs.dashboard_changed }}" == "true" ]]; then
-            body+="- **Dashboard template**: upstream dashboard changed; local patches re-applied and validated."$'\n'
-          fi
-          body+=$'\n'"This PR is safe to merge when CI passes."
-          # Write to file to preserve newlines safely
-          printf '%s' "$body" > /tmp/pr-body.txt
-          echo "body_file=/tmp/pr-body.txt" >> "$GITHUB_OUTPUT"
+          bt='`'
+          {
+            printf 'Automated dashboard sync from upstream Headroom (%s%s%s).\n\n' "$bt" "$UPSTREAM_REF" "$bt"
+            printf '%s\n\n' '- **Dashboard template**: upstream dashboard changed; local patches re-applied and validated.'
+            printf '%s\n' 'This PR is safe to merge when CI passes.'
+          } > /tmp/pr-body.txt
 
       - name: Create pull request
         id: cpr
@@ -139,10 +94,10 @@ jobs:
         uses: peter-evans/create-pull-request@v7.0.8
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "chore(upstream): sync headroom upstream changes"
-          title: "chore(upstream): sync headroom upstream changes"
+          commit-message: "chore(upstream): sync headroom dashboard template"
+          title: "chore(upstream): sync headroom dashboard template"
           body-path: /tmp/pr-body.txt
-          branch: chore/sync-upstream-headroom
+          branch: chore/sync-upstream-dashboard
           delete-branch: true
           labels: |
             chore
@@ -155,19 +110,3 @@ jobs:
         run: |
           set -euo pipefail
           gh pr merge "${{ steps.cpr.outputs.pull-request-url }}" --auto --squash
-
-      # Dispatch the bedrock image rebuild only when the compat record changed,
-      # which signals new headroom code that needs to be baked into the image.
-      # Dashboard changes don't need a rebuild — dashboard.html is volume-mounted.
-      # We dispatch explicitly here because GITHUB_TOKEN auto-merges don't
-      # trigger downstream push-based workflow triggers.
-      - name: Dispatch bedrock image rebuild
-        if: steps.changes.outputs.compat_changed == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          gh workflow run docker-bedrock-native.yml \
-            --repo "${{ github.repository }}" \
-            --field headroom_source_repo=chopratejas/headroom \
-            --field headroom_source_ref="${{ steps.upstream.outputs.ref }}"

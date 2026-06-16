@@ -1,37 +1,50 @@
-name: Docker Bedrock Native
+name: Docker Headroom Bundled
+
+# Stopgap workflow. Builds the published headroom `:code` image with the native
+# `headroom-proxy` binary layered on top (see Dockerfile.headroom-bundled) and
+# publishes it as `:headroom-bundled`. Headway's compose runs BOTH the Python
+# proxy and the native bedrock proxy from this single image.
+#
+# This exists only because the upstream headroom publish that would have shipped
+# the binary inside `:code` failed transiently. Once upstream `:code` carries
+# the binary, delete this workflow + Dockerfile.headroom-bundled and point
+# HEADROOM_IMAGE straight at ghcr.io/chopratejas/headroom:code.
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  # Source defaults to upstream headroom main; workflow_dispatch can override.
   HEADROOM_SOURCE_REPO: chopratejas/headroom
   HEADROOM_SOURCE_REF: main
+  HEADROOM_CODE_IMAGE: ghcr.io/chopratejas/headroom:code
 
 "on":
   workflow_dispatch:
     inputs:
       headroom_source_repo:
-        description: "Headroom source repo (owner/name)"
+        description: "Headroom source repo (owner/name) for the proxy binary"
         required: false
         default: "chopratejas/headroom"
       headroom_source_ref:
-        description: "Headroom source ref (commit/tag/branch)"
+        description: "Headroom source ref (commit/tag/branch) for the proxy binary"
         required: false
         default: "main"
+      headroom_code_image:
+        description: "Base headroom :code image to layer the binary onto"
+        required: false
+        default: "ghcr.io/chopratejas/headroom:code"
   push:
     branches: [main]
     paths:
-      - "Dockerfile.bedrock-native"
-      - ".github/workflows/docker-bedrock-native.yml"
-      - "scripts/build/**"
+      - "Dockerfile.headroom-bundled"
+      - ".github/workflows/docker-headroom-bundled.yml"
 
 permissions:
   contents: read
   packages: write
 
 concurrency:
-  group: docker-bedrock-native-${{ github.ref }}
+  group: docker-headroom-bundled-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -41,10 +54,10 @@ jobs:
         include:
           - runner: ubuntu-24.04
             platform: linux/amd64
-            cache-scope: bedrock-native-amd64
+            cache-scope: headroom-bundled-amd64
           - runner: ubuntu-24.04-arm
             platform: linux/arm64
-            cache-scope: bedrock-native-arm64
+            cache-scope: headroom-bundled-arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 300
 
@@ -58,18 +71,26 @@ jobs:
           image_name="$(printf '%s' '${{ env.IMAGE_NAME }}' | tr '[:upper:]' '[:lower:]')"
           printf 'image_name=%s\n' "$image_name" >> "$GITHUB_OUTPUT"
 
-      - name: Compute short SHA
-        id: short-sha
-        run: printf 'sha=%s\n' "${GITHUB_SHA:0:8}" >> "$GITHUB_OUTPUT"
-
-      - name: Resolve source repo/ref
+      - name: Resolve source repo/ref/base
         id: source
+        env:
+          INPUT_REPO: ${{ github.event.inputs.headroom_source_repo || env.HEADROOM_SOURCE_REPO }}
+          INPUT_REF: ${{ github.event.inputs.headroom_source_ref || env.HEADROOM_SOURCE_REF }}
+          INPUT_BASE: ${{ github.event.inputs.headroom_code_image || env.HEADROOM_CODE_IMAGE }}
         run: |
-          repo="${{ github.event.inputs.headroom_source_repo || env.HEADROOM_SOURCE_REPO }}"
-          ref="${{ github.event.inputs.headroom_source_ref || env.HEADROOM_SOURCE_REF }}"
-          printf 'repo=%s\n' "$repo" >> "$GITHUB_OUTPUT"
-          printf 'ref=%s\n' "$ref" >> "$GITHUB_OUTPUT"
-          echo "Building from $repo @ $ref"
+          set -euo pipefail
+          repo="$INPUT_REPO"
+          ref="$INPUT_REF"
+          base="$INPUT_BASE"
+          [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "Invalid repo"; exit 1; }
+          [[ "$ref"  =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "Invalid ref"; exit 1; }
+          [[ "$base" =~ ^[A-Za-z0-9./:@_-]+$ ]] || { echo "Invalid base image"; exit 1; }
+          {
+            printf 'repo=%s\n' "$repo"
+            printf 'ref=%s\n' "$ref"
+            printf 'base=%s\n' "$base"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building binary from $repo @ $ref, layered onto $base"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4.1.0
@@ -86,7 +107,7 @@ jobs:
         uses: docker/build-push-action@v7.2.0
         with:
           context: .
-          file: Dockerfile.bedrock-native
+          file: Dockerfile.headroom-bundled
           platforms: ${{ matrix.platform }}
           push: true
           cache-from: type=gha,scope=${{ matrix.cache-scope }}
@@ -94,6 +115,7 @@ jobs:
           build-args: |
             HEADROOM_GIT_REPO=${{ steps.source.outputs.repo }}
             HEADROOM_GIT_REF=${{ steps.source.outputs.ref }}
+            HEADROOM_CODE_IMAGE=${{ steps.source.outputs.base }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image_name }},push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest
@@ -149,10 +171,9 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image_name }}
           tags: |
-            type=raw,value=bedrock-native-${{ steps.short-sha.outputs.sha }}
-            type=raw,value=bedrock-native
-            type=raw,value=bedrock-native-latest
-            type=ref,event=branch,prefix=bedrock-native-
+            type=raw,value=headroom-bundled-${{ steps.short-sha.outputs.sha }}
+            type=raw,value=headroom-bundled
+            type=ref,event=branch,prefix=headroom-bundled-
 
       - name: Create and push multi-platform manifest
         working-directory: /tmp/digests

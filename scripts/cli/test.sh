@@ -646,7 +646,7 @@ if [[ -z "$BEDROCK_NATIVE_ALIAS" ]]; then
   info "Fix: ./headway up"
 elif ! bedrock_native_routes_available "$BEDROCK_NATIVE_GATEWAY"; then
   fail "Bedrock :4002 does not expose native /model/{id}/converse routes"
-  info "Image lacks native Bedrock route surface; set HEADROOM_BEDROCK_IMAGE to a native bedrock image and restart"
+  info "Image lacks native Bedrock route surface; ensure HEADROOM_IMAGE bundles headroom-proxy and restart"
 else
   RESOLVED=$(resolve_bedrock_native_model "$BEDROCK_NATIVE_ALIAS")
   BEDROCK_NATIVE_MODEL=$(echo "$RESOLVED" | awk '{print $1}')
@@ -693,7 +693,7 @@ elif 'output' in d:
         fail "Bedrock :4002 converse had envelope parse error for request $CONVERSE_REQ_ID"
       elif [[ $CONVERSE_EXPECT_ANTHROPIC_COMPRESS -eq 1 ]] && bedrock_log_has_for_request "$CONVERSE_REQ_ID" '"event":"bedrock_compression_skipped"'; then
         fail "Bedrock :4002 converse skipped compression for anthropic request $CONVERSE_REQ_ID"
-        info "Check vendor detection path in Bedrock native image"
+        info "Check vendor detection path in the native bedrock proxy"
       else
         ok "Bedrock :4002 converse did not report compression skip/parse errors"
       fi

@@ -619,10 +619,16 @@ def _compress_bedrock_body(
     model_id: str,
     *,
     action: str,
-) -> tuple[dict[str, Any], int, int, bool]:
+) -> tuple[dict[str, Any], int, int, bool, bool]:
+    """Return (updated_body, tokens_before, tokens_after, marker_applied, normalized).
+
+    ``normalized`` is True only when the body was fully converted to
+    InvokeModel-format (messages re-encoded via _anthropic_messages_to_bedrock).
+    Callers gate the /converse→/invoke path rewrite on this flag.
+    """
     messages = body.get("messages")
     if not isinstance(messages, list) or not messages:
-        return body, 0, 0, False
+        return body, 0, 0, False, False
 
     if DEBUG_COMPRESS:
         try:
@@ -650,7 +656,7 @@ def _compress_bedrock_body(
 
     anthropic_messages = _bedrock_messages_to_anthropic(messages)
     if not anthropic_messages:
-        return body, 0, 0, False
+        return body, 0, 0, False, False
 
     cached_input = _COMP_CACHE.apply_cached(anthropic_messages)
     compressed_messages, tokens_before, tokens_after = _compress_messages(cached_input, model_id)
@@ -718,7 +724,7 @@ def _compress_bedrock_body(
         else:
             updated.pop("inferenceConfig", None)
 
-    return updated, int(tokens_before), int(tokens_after), marker_applied
+    return updated, int(tokens_before), int(tokens_after), marker_applied, True
 
 
 def _compress_anthropic_v1_body(
@@ -1015,16 +1021,18 @@ async def _forward_request(
     upstream_base: str,
     body: bytes,
     stream: bool,
+    outbound_path: str | None = None,
     on_stream_complete=None,
 ):
     """Forward to the Bedrock gateway.
 
-    For streaming responses, ``on_stream_complete(output_tokens, status_code)``
-    is invoked after the stream is fully consumed so the caller can record
+    ``outbound_path`` overrides the upstream request path (defaults to the
+    inbound path). For streaming responses, ``on_stream_complete(...)`` is
+    invoked after the stream is fully consumed so the caller can record
     output-token stats (which are only known once the stream ends).
     """
     query = request.url.query
-    url = f"{upstream_base.rstrip('/')}{request.url.path}"
+    url = f"{upstream_base.rstrip('/')}{outbound_path or request.url.path}"
     if query:
         url = f"{url}?{query}"
 
@@ -1035,6 +1043,16 @@ async def _forward_request(
     }
     if body:
         headers["content-length"] = str(len(body))
+    if stream:
+        # The native bedrock proxy translates Bedrock's binary EventStream to
+        # SSE unless the caller opts into native framing via this Accept value
+        # (headroom OutputMode::from_accept). Headway's lane relays Bedrock-
+        # native bytes straight back to the agent, so force EventStream
+        # passthrough here. This replaces the former eventstream_to_sse source
+        # patch — output mode is now driven by the request header, which means
+        # the bedrock gateway can run the stock upstream headroom-proxy binary.
+        headers = {k: v for (k, v) in headers.items() if k.lower() != "accept"}
+        headers["accept"] = "application/vnd.amazon.eventstream"
 
     client = request.app.state.bedrock_proxy_client
     req = client.build_request(request.method, url, headers=headers, content=body)
@@ -1309,6 +1327,7 @@ def apply_patch() -> None:
             marker_applied = False
             compressed = False
             failed = False
+            invoke_body_normalized = False
 
             try:
                 body_json, body_bytes = await read_request_json_with_bytes(request)
@@ -1322,7 +1341,7 @@ def apply_patch() -> None:
                 and len(body_bytes) <= MAX_COMPRESS_BYTES
             ):
                 try:
-                    updated, before, after, marker_applied = await run_in_threadpool(
+                    updated, before, after, marker_applied, normalized = await run_in_threadpool(
                         lambda: _compress_bedrock_body(
                             body_json,
                             model_id,
@@ -1332,11 +1351,27 @@ def apply_patch() -> None:
                     body_bytes = json.dumps(
                         updated, ensure_ascii=False, separators=(",", ":")
                     ).encode("utf-8")
+                    if action == "converse" and normalized:
+                        invoke_body_normalized = True
                     compressed = before > 0 and after > 0 and after < before
                 except Exception:  # noqa: BLE001
                     pass  # compression is optional; forward original body
 
             is_stream = _is_streaming_action(action)
+            # The non-streaming converse path emits InvokeModel-format bodies
+            # (_anthropic_messages_to_bedrock with prefer_bedrock_blocks off,
+            # plus InvokeModel system/inferenceConfig normalization), so route
+            # them to the InvokeModel endpoint. Upstream headroom #999 routes
+            # /converse natively and would reject InvokeModel blocks; the
+            # converse-stream path already emits Converse-native blocks and
+            # keeps its native /converse-stream route.
+            # Only rewrite the path when body normalization succeeded; if
+            # _compress_bedrock_body returned the original Converse body
+            # (empty/unparseable messages), keep /converse so the upstream
+            # routes it natively.
+            outbound_path = request.url.path
+            if invoke_body_normalized and outbound_path.endswith("/converse"):
+                outbound_path = outbound_path[: -len("/converse")] + "/invoke"
             try:
                 # For streaming, output/cache tokens are only known once the
                 # stream is fully consumed; defer into the callback.
@@ -1361,6 +1396,7 @@ def apply_patch() -> None:
                     upstream_base=BEDROCK_UPSTREAM,
                     body=body_bytes,
                     stream=is_stream,
+                    outbound_path=outbound_path,
                     on_stream_complete=_on_stream_complete if is_stream else None,
                 )
                 if is_stream:
