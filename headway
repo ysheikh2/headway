@@ -14,6 +14,11 @@ done
 ROOT_DIR="$(cd "$(dirname "$_self")" && pwd)"
 unset _self
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
+# headway always manages both lanes; export COMPOSE_PROFILES so every
+# docker compose invocation below includes the optional litellm service.
+# Users running docker compose directly (without headway) get Bedrock-only
+# by default; they can opt in with: docker compose --profile litellm up
+export COMPOSE_PROFILES=litellm
 ENV_FILE="$ROOT_DIR/.env"
 KILO_CONF="$HOME/.config/kilo/kilo.jsonc"
 case "$(uname -s 2>/dev/null)" in

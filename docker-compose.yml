@@ -1,4 +1,4 @@
-# LiteLLM + Headroom gateway — Docker Compose
+# Headroom gateway — Docker Compose
 #
 # Architecture:
 #   Kilo (Copilot)  -> Headroom :4000 -> LiteLLM :4001 -> GitHub Copilot
@@ -11,9 +11,15 @@
 # bedrock_native_patch sets the matching Accept header on streaming forwards.
 # Runtime state is persisted in-repo under .data/ (gitignored).
 # Headroom state is intentionally shared across :4000 and :4002 lanes.
+#
+# LiteLLM is optional (profile: litellm). Start without it for Bedrock-only use:
+#   docker compose up
+# Include LiteLLM for the Copilot lane:
+#   docker compose --profile litellm up
 
 services:
   litellm:
+    profiles: [litellm]
     image: ghcr.io/berriai/litellm:main-stable
     container_name: litellm-gateway
     restart: unless-stopped
@@ -70,13 +76,6 @@ services:
       - "--no-rate-limit"
       - "--memory"
       - "--code-aware"
-    depends_on:
-      litellm:
-        # Use service_started (not service_healthy) so headroom can start
-        # immediately alongside litellm. During Copilot device auth, litellm
-        # is unhealthy for up to ~3 minutes; service_healthy would cause
-        # docker compose to error before the user can complete auth.
-        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8787/livez"]
       interval: 30s
@@ -102,6 +101,8 @@ services:
       - AWS_PROFILE=${BEDROCK_AWS_PROFILE:?BEDROCK_AWS_PROFILE must be set — run 'headway init'}
       - AWS_REGION=${AWS_REGION:?AWS_REGION must be set — run 'headway init'}
       - AWS_DEFAULT_REGION=${AWS_REGION:?AWS_REGION must be set — run 'headway init'}
+      - AWS_CONFIG_FILE=/home/nonroot/.aws/config
+      - AWS_SHARED_CREDENTIALS_FILE=/home/nonroot/.aws/credentials
       - HEADROOM_PROXY_AWS_PROFILE=${BEDROCK_AWS_PROFILE:?BEDROCK_AWS_PROFILE must be set — run 'headway init'}
       - HEADROOM_PROXY_BEDROCK_REGION=${AWS_REGION:?AWS_REGION must be set — run 'headway init'}
     command:
@@ -120,5 +121,5 @@ services:
       retries: 3
       start_period: 30s
     volumes:
-      - ./.data/headroom:/root/.headroom
-      - ${HOME}/.aws:/root/.aws
+      - ./.data/headroom:/home/nonroot/.headroom
+      - ${HOME}/.aws:/home/nonroot/.aws
