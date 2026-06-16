@@ -5,12 +5,14 @@
 #   Kilo (Bedrock)  -> Headroom :4002 -> headroom-proxy (SigV4) -> AWS Bedrock
 #
 # Both the Python proxy (headroom) and the native bedrock proxy (headroom-bedrock)
-# run from a SINGLE image, HEADROOM_IMAGE: upstream headroom #999 bundles the
-# native `headroom-proxy` binary inside the published images, so no separate
-# bedrock image or source patching is needed — the bedrock service just runs a
-# different entrypoint from the same image. The native proxy emits Bedrock
-# EventStream framing because bedrock_native_patch sets the matching Accept
-# header on streaming forwards; no source patch required.
+# run from a SINGLE image, HEADROOM_IMAGE. Headroom #999 bundles the native
+# `headroom-proxy` binary in its images, but the publish that would have landed
+# it in :code failed transiently, so HEADROOM_IMAGE currently points at a
+# stopgap bundled image (ghcr.io/ysheikh2/headway:headroom-bundled). Once
+# upstream :code ships the binary, point HEADROOM_IMAGE at it and drop the
+# stopgap. The bedrock service just runs a different entrypoint from the same
+# image. The native proxy emits Bedrock EventStream framing because
+# bedrock_native_patch sets the matching Accept header on streaming forwards.
 # Runtime state is persisted in-repo under .data/ (gitignored).
 # Headroom state is intentionally shared across :4000 and :4002 lanes.
 

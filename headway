@@ -95,6 +95,8 @@ iter_env_template_pairs() {
 
   # Fallback defaults if template is missing.
   printf '%s\n' "AWS_PROFILE=$DEFAULT_AWS_PROFILE"
+  printf '%s\n' "BEDROCK_AWS_PROFILE=$DEFAULT_AWS_PROFILE"
+  printf '%s\n' "BEDROCK_DISCOVERY_AWS_PROFILE=$DEFAULT_AWS_PROFILE"
   printf '%s\n' "AWS_REGION=$DEFAULT_AWS_REGION"
   printf '%s\n' "HEADROOM_IMAGE=$DEFAULT_HEADROOM_IMAGE"
 }

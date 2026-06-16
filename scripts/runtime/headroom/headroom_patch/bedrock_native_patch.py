@@ -619,10 +619,16 @@ def _compress_bedrock_body(
     model_id: str,
     *,
     action: str,
-) -> tuple[dict[str, Any], int, int, bool]:
+) -> tuple[dict[str, Any], int, int, bool, bool]:
+    """Return (updated_body, tokens_before, tokens_after, marker_applied, normalized).
+
+    ``normalized`` is True only when the body was fully converted to
+    InvokeModel-format (messages re-encoded via _anthropic_messages_to_bedrock).
+    Callers gate the /converse→/invoke path rewrite on this flag.
+    """
     messages = body.get("messages")
     if not isinstance(messages, list) or not messages:
-        return body, 0, 0, False
+        return body, 0, 0, False, False
 
     if DEBUG_COMPRESS:
         try:
@@ -650,7 +656,7 @@ def _compress_bedrock_body(
 
     anthropic_messages = _bedrock_messages_to_anthropic(messages)
     if not anthropic_messages:
-        return body, 0, 0, False
+        return body, 0, 0, False, False
 
     cached_input = _COMP_CACHE.apply_cached(anthropic_messages)
     compressed_messages, tokens_before, tokens_after = _compress_messages(cached_input, model_id)
@@ -718,7 +724,7 @@ def _compress_bedrock_body(
         else:
             updated.pop("inferenceConfig", None)
 
-    return updated, int(tokens_before), int(tokens_after), marker_applied
+    return updated, int(tokens_before), int(tokens_after), marker_applied, True
 
 
 def _compress_anthropic_v1_body(
@@ -1321,6 +1327,7 @@ def apply_patch() -> None:
             marker_applied = False
             compressed = False
             failed = False
+            invoke_body_normalized = False
 
             try:
                 body_json, body_bytes = await read_request_json_with_bytes(request)
@@ -1334,7 +1341,7 @@ def apply_patch() -> None:
                 and len(body_bytes) <= MAX_COMPRESS_BYTES
             ):
                 try:
-                    updated, before, after, marker_applied = await run_in_threadpool(
+                    updated, before, after, marker_applied, normalized = await run_in_threadpool(
                         lambda: _compress_bedrock_body(
                             body_json,
                             model_id,
@@ -1344,6 +1351,8 @@ def apply_patch() -> None:
                     body_bytes = json.dumps(
                         updated, ensure_ascii=False, separators=(",", ":")
                     ).encode("utf-8")
+                    if action == "converse" and normalized:
+                        invoke_body_normalized = True
                     compressed = before > 0 and after > 0 and after < before
                 except Exception:  # noqa: BLE001
                     pass  # compression is optional; forward original body
@@ -1356,8 +1365,12 @@ def apply_patch() -> None:
             # /converse natively and would reject InvokeModel blocks; the
             # converse-stream path already emits Converse-native blocks and
             # keeps its native /converse-stream route.
+            # Only rewrite the path when body normalization succeeded; if
+            # _compress_bedrock_body returned the original Converse body
+            # (empty/unparseable messages), keep /converse so the upstream
+            # routes it natively.
             outbound_path = request.url.path
-            if action == "converse" and outbound_path.endswith("/converse"):
+            if invoke_body_normalized and outbound_path.endswith("/converse"):
                 outbound_path = outbound_path[: -len("/converse")] + "/invoke"
             try:
                 # For streaming, output/cache tokens are only known once the
