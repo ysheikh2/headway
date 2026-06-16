@@ -10,8 +10,10 @@ Product/runtime usage details live in `README.md` and should not be duplicated h
 
 ## Repo Intent
 
-Headway is an integration/operations wrapper around upstream Headroom + LiteLLM,
-with a dedicated native Bedrock lane.
+Headway is an integration/operations wrapper around upstream Headroom, providing
+a two-lane AI gateway: OpenAI-compatible (Copilot) via Headroom + LiteLLM, and
+Bedrock-native via headroom-proxy. See `docs/adr/` for architecture decisions,
+including the planned removal of the LiteLLM sidecar (ADR-0001).
 
 ## Non-Negotiable Rules
 
@@ -44,7 +46,7 @@ When debugging provider failures, test Copilot/OpenAI-compatible and Bedrock-nat
 - `headway` — main CLI script
 - `install.sh` — one-line installer (clones repo, symlinks `headway`, sets up shell completion)
 - `docker-compose.yml`
-- `litellm_config.yaml`
+- `litellm_config.yaml` — LiteLLM model/provider config (Copilot lane; see ADR-0001 for planned removal)
 - `scripts/cli/headroom_python.py` — shared Python helpers for CLI commands
 - `scripts/cli/generate-litellm-config.sh` — Bedrock model discovery and config generation
 - `scripts/cli/headway-completion.bash` — bash/zsh tab-completion script (sourced at init time)
