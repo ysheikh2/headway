@@ -573,7 +573,7 @@ wait_for_copilot_auth() {
   # Codes were issued but the explicit failure message is present → all 3
   # windows expired before the user could enter a code.
   elif docker logs --since "$session_scope" litellm-gateway 2>/dev/null |
-      grep -q "Failed to get access token after 3 attempts"; then
+    grep -q "Failed to get access token after 3 attempts"; then
     session_exhausted=true
   fi
 
@@ -609,10 +609,10 @@ wait_for_copilot_auth() {
     #   because each new code resets secs_without_code to 0.
     local needs_restart=false
     if docker logs --since "$logs_since" litellm-gateway 2>/dev/null |
-        grep -q "Failed to get access token after 3 attempts"; then
-      needs_restart=true  # Signal A
+      grep -q "Failed to get access token after 3 attempts"; then
+      needs_restart=true # Signal A
     elif [[ -z "$last_code" && $secs_without_code -ge 90 ]]; then
-      needs_restart=true  # Signal B
+      needs_restart=true # Signal B
     fi
 
     if $needs_restart; then
