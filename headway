@@ -25,7 +25,7 @@ PY_HELPER="$ROOT_DIR/scripts/cli/headroom_python.py"
 
 DEFAULT_AWS_REGION="eu-central-1"
 DEFAULT_AWS_PROFILE="default"
-DEFAULT_BEDROCK_IMAGE="ghcr.io/ysheikh2/headway:bedrock-native"
+DEFAULT_HEADROOM_IMAGE="ghcr.io/ysheikh2/headway:headroom-bundled"
 ENV_TEMPLATE_FILE="$ROOT_DIR/.env.template"
 
 GATEWAY_URL="http://127.0.0.1:4000"
@@ -36,7 +36,7 @@ load_env() {
   # Unset all headway-managed vars so they can only come from .env, never
   # silently inherited from the outer shell environment.
   unset AWS_PROFILE AWS_REGION BEDROCK_AWS_PROFILE BEDROCK_DISCOVERY_AWS_PROFILE \
-    HEADROOM_BEDROCK_IMAGE HEADROOM_COMPRESS_USER_MESSAGES HEADROOM_MIN_TOKENS \
+    HEADROOM_IMAGE HEADROOM_COMPRESS_USER_MESSAGES HEADROOM_MIN_TOKENS \
     HEADROOM_PROTECT_RECENT HEADWAY_BEDROCK_AUTO_CACHE_CONTROL
   if [[ -f "$ENV_FILE" ]]; then
     set -o allexport
@@ -95,7 +95,7 @@ iter_env_template_pairs() {
   # Fallback defaults if template is missing.
   printf '%s\n' "AWS_PROFILE=$DEFAULT_AWS_PROFILE"
   printf '%s\n' "AWS_REGION=$DEFAULT_AWS_REGION"
-  printf '%s\n' "HEADROOM_BEDROCK_IMAGE=$DEFAULT_BEDROCK_IMAGE"
+  printf '%s\n' "HEADROOM_IMAGE=$DEFAULT_HEADROOM_IMAGE"
 }
 
 sync_headroom_tuning_env() {
@@ -156,8 +156,8 @@ prompt_label_for_env_key() {
     AWS_REGION)
       echo "AWS region"
       ;;
-    HEADROOM_BEDROCK_IMAGE)
-      echo "Bedrock lane image"
+    HEADROOM_IMAGE)
+      echo "Headroom image (Python proxy + native bedrock binary)"
       ;;
     HEADROOM_COMPRESS_USER_MESSAGES)
       echo "Compress user messages (1=on, 0=off) — reduces tokens sent, default is fine"
@@ -197,14 +197,6 @@ ensure_env_defaults() {
     if [[ -n "$(get_env_key "BEDROCK_DISCOVERY_AWS_PROFILE")" ]]; then
       set_env_key "BEDROCK_DISCOVERY_AWS_PROFILE" "$aws_profile_override"
     fi
-  fi
-
-  # Migrate legacy local pinned image to rolling remote tag.
-  local current_image
-  current_image=$(get_env_key "HEADROOM_BEDROCK_IMAGE")
-  if [[ "$current_image" == "headroom-local:bedrock-b08ec15-sso-esdefault" ]]; then
-    set_env_key "HEADROOM_BEDROCK_IMAGE" "$DEFAULT_BEDROCK_IMAGE"
-    echo "migrated HEADROOM_BEDROCK_IMAGE to $DEFAULT_BEDROCK_IMAGE"
   fi
 }
 
@@ -343,14 +335,16 @@ ensure_aws_session() {
 }
 
 compose_pull() {
-  docker compose -f "$COMPOSE_FILE" pull litellm headroom
-  local bedrock_image
-  bedrock_image=$(docker compose -f "$COMPOSE_FILE" config --format json 2>/dev/null |
-    python3 "$PY_HELPER" compose-image headroom-bedrock 2>/dev/null || true)
-  if [[ -n "$bedrock_image" && "$bedrock_image" == *"/"* ]]; then
-    docker compose -f "$COMPOSE_FILE" pull headroom-bedrock
+  docker compose -f "$COMPOSE_FILE" pull litellm
+  # headroom and headroom-bedrock share one image (HEADROOM_IMAGE). Only pull
+  # from a registry — a locally-built override has no remote to fetch.
+  local headroom_image
+  headroom_image=$(docker compose -f "$COMPOSE_FILE" config --format json 2>/dev/null |
+    python3 "$PY_HELPER" compose-image headroom 2>/dev/null || true)
+  if [[ -n "$headroom_image" && "$headroom_image" == *"/"* ]]; then
+    docker compose -f "$COMPOSE_FILE" pull headroom headroom-bedrock
   else
-    echo "Skipping pull for local headroom-bedrock image: ${bedrock_image:-<unset>}"
+    echo "Skipping pull for local headroom image: ${headroom_image:-<unset>}"
   fi
 }
 
@@ -1142,7 +1136,7 @@ cmd_config() {
       echo "BEDROCK_AWS_PROFILE=${BEDROCK_AWS_PROFILE:-<unset>}"
       echo "BEDROCK_DISCOVERY_AWS_PROFILE=${BEDROCK_DISCOVERY_AWS_PROFILE:-<unset>}"
       echo "AWS_REGION=${AWS_REGION:-<unset>}"
-      echo "HEADROOM_BEDROCK_IMAGE=${HEADROOM_BEDROCK_IMAGE:-<unset>}"
+      echo "HEADROOM_IMAGE=${HEADROOM_IMAGE:-<unset>}"
       echo "HEADROOM_COMPRESS_USER_MESSAGES=${HEADROOM_COMPRESS_USER_MESSAGES:-1}"
       echo "HEADROOM_MIN_TOKENS=${HEADROOM_MIN_TOKENS:-120}"
       echo "HEADROOM_PROTECT_RECENT=${HEADROOM_PROTECT_RECENT:-2}"
@@ -1298,10 +1292,8 @@ cmd_cleanup() {
     echo "removed .data/"
   fi
   if [[ "$do_images" == "true" ]]; then
-    docker image rm ghcr.io/chopratejas/headroom:code 2>/dev/null || true
+    docker image rm "${HEADROOM_IMAGE:-$DEFAULT_HEADROOM_IMAGE}" 2>/dev/null || true
     docker image rm ghcr.io/berriai/litellm:main-stable 2>/dev/null || true
-    docker image rm ghcr.io/ysheikh2/headway:bedrock-native 2>/dev/null || true
-    docker image rm ghcr.io/ysheikh2/headway:bedrock-native-latest 2>/dev/null || true
     echo "removed Docker images"
   fi
   if [[ "$do_kilo" == "true" ]]; then
@@ -1351,10 +1343,8 @@ cmd_uninstall() {
   if docker info >/dev/null 2>&1; then
     docker compose -f "$COMPOSE_FILE" down --remove-orphans 2>/dev/null || true
     docker rm -f headroom-gateway litellm-gateway headroom-bedrock-gateway 2>/dev/null || true
-    docker image rm ghcr.io/chopratejas/headroom:code 2>/dev/null || true
+    docker image rm "${HEADROOM_IMAGE:-$DEFAULT_HEADROOM_IMAGE}" 2>/dev/null || true
     docker image rm ghcr.io/berriai/litellm:main-stable 2>/dev/null || true
-    docker image rm ghcr.io/ysheikh2/headway:bedrock-native 2>/dev/null || true
-    docker image rm ghcr.io/ysheikh2/headway:bedrock-native-latest 2>/dev/null || true
     echo "stopped containers and removed images"
   fi
   rm -f "$ENV_FILE"

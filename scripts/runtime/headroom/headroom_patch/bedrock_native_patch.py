@@ -1035,6 +1035,16 @@ async def _forward_request(
     }
     if body:
         headers["content-length"] = str(len(body))
+    if stream:
+        # The native bedrock proxy translates Bedrock's binary EventStream to
+        # SSE unless the caller opts into native framing via this Accept value
+        # (headroom OutputMode::from_accept). Headway's lane relays Bedrock-
+        # native bytes straight back to the agent, so force EventStream
+        # passthrough here. This replaces the former eventstream_to_sse source
+        # patch — output mode is now driven by the request header, which means
+        # the bedrock gateway can run the stock upstream headroom-proxy binary.
+        headers = {k: v for (k, v) in headers.items() if k.lower() != "accept"}
+        headers["accept"] = "application/vnd.amazon.eventstream"
 
     client = request.app.state.bedrock_proxy_client
     req = client.build_request(request.method, url, headers=headers, content=body)

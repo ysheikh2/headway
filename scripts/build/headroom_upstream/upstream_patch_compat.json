@@ -1,9 +1,0 @@
-{
-  "cargo_check_ok": true,
-  "checked_at_utc": "2026-06-15T20:21:21.644137+00:00",
-  "patch_apply_ok": true,
-  "patch_script": "scripts/build/headroom_upstream/patch_headroom_upstream.py",
-  "requested_ref": "main",
-  "resolved_sha": "7c8c909c853a264c833c645403cbbb1894b91432",
-  "upstream_repo": "chopratejas/headroom"
-}

@@ -62,12 +62,22 @@ When debugging provider failures, test Copilot/OpenAI-compatible and Bedrock-nat
 
 ## CI / Docker Build Triggers
 
-The `docker-bedrock-native` workflow builds and pushes the Bedrock Rust image. It fires on push to `main` when any of these paths change:
+The `docker-headroom-bundled` workflow builds and pushes `HEADROOM_IMAGE` — the
+upstream `chopratejas/headroom:code` proxy with the native `headroom-proxy` binary
+layered on top (`Dockerfile.headroom-bundled`). Both the `headroom` and
+`headroom-bedrock` compose services run from this single image. It fires on push to
+`main` when `Dockerfile.headroom-bundled` or its workflow change, and can be run
+manually via GitHub Actions → Docker Headroom Bundled → Run workflow.
 
-- `Dockerfile.bedrock-native`
-- `.github/workflows/docker-bedrock-native.yml`
-- `scripts/build/**` — upstream patch scripts copied into the image at build time
+This image is a **stopgap**: upstream headroom #999 already bundles the binary in its
+published images, but the publish that would have carried it failed transiently. Once
+upstream `:code` ships the binary, delete `Dockerfile.headroom-bundled` and its
+workflow and point `HEADROOM_IMAGE` straight at `ghcr.io/chopratejas/headroom:code`.
 
-If you change anything under `scripts/build/`, the image rebuild is automatic. If you need to rebuild without touching those files (e.g. to pick up a new upstream headroom commit), trigger the workflow manually via GitHub Actions → Docker Bedrock Native → Run workflow.
+The native bedrock proxy emits Bedrock EventStream framing because `bedrock_native_patch`
+sets `Accept: application/vnd.amazon.eventstream` on streaming forwards — no source patch
+to the binary is required.
 
-The `sync-upstream-patch-compat` workflow runs daily and auto-creates a PR when the upstream patch compatibility record changes. GitHub Actions is permitted to create PRs in this repo (`can_approve_pull_request_reviews: true` is set at the repo level).
+The `sync-upstream-headroom` workflow runs daily and auto-creates a PR when the upstream
+dashboard template changes. GitHub Actions is permitted to create PRs in this repo
+(`can_approve_pull_request_reviews: true` is set at the repo level).
