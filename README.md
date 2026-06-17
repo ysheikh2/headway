@@ -41,9 +41,13 @@ headway uninstall --yes
 - GitHub Copilot + OpenAI-compatible lane: `http://127.0.0.1:4000/v1`
 - Native Bedrock lane: `http://127.0.0.1:4002`
 
+A single native Rust `headroom-proxy` process fronts both lanes. It compresses
+every request, signs Bedrock natively (SigV4), and serves one unified `/stats` +
+`/dashboard` — there is no Python proxy and no Bedrock sidecar.
+
 ```text
-Client (Copilot/OpenAI-compatible) → Headroom :4000 → LiteLLM :4001 → Provider
-Client (Bedrock native)            → Headroom :4002 (compress+cache) → headroom-bedrock (Rust SigV4) → AWS Bedrock
+Client (Copilot/OpenAI-compatible) → headroom-proxy :4000 → LiteLLM :4001 → GitHub Copilot
+Client (Bedrock native)            → headroom-proxy :4002 (compress+cache, native SigV4) → AWS Bedrock
 ```
 
 ## Client Compatibility
@@ -67,7 +71,7 @@ headway init
 - Creates `.env` if missing, prompting for required values
 - Verifies AWS sessions and triggers SSO login when needed
 - Writes Kilo + Claude Code presets
-- Generates `litellm_config.yaml` from your available Bedrock models
+- Generates the Copilot-only `litellm_config.yaml` (Bedrock is native in the proxy)
 
 Optional shortcut if you already know your AWS profile:
 
@@ -79,7 +83,6 @@ AWS profile behavior:
 
 - `AWS_PROFILE` (required): primary profile for the LiteLLM lane
 - `BEDROCK_AWS_PROFILE` (defaults to `AWS_PROFILE`): native Bedrock runtime profile; set separately only if you use a different profile for Bedrock
-- `BEDROCK_DISCOVERY_AWS_PROFILE` (defaults to `BEDROCK_AWS_PROFILE`): profile used by `headway config regen`
 
 ### Start the gateway
 
@@ -92,7 +95,7 @@ headway up
 ```bash
 headway doctor    # containers, health, AWS session, client presets
 headway stats     # savings and cost report
-headway test      # full end-to-end smoke tests
+headway test      # single-proxy smoke test (/healthz, /stats, /dashboard, recorder)
 ```
 
 Dashboard: `http://127.0.0.1:4000/dashboard`
@@ -114,8 +117,8 @@ headway <command>
 | `auth` | Refresh AWS sessions and restart services |
 | `doctor` | Diagnostics: containers, health, models, client presets, AWS sessions |
 | `stats` | Savings, cost, and cache report |
-| `test` | Full end-to-end smoke tests |
-| `config regen` | Regenerate `litellm_config.yaml` from Bedrock model discovery |
+| `test` | Single-proxy smoke test (`/healthz`, unified `/stats`, `/dashboard`, recorder) |
+| `config regen` | Regenerate the Copilot-only `litellm_config.yaml` |
 | `config setup [kilo\|claude\|all]` | Write client presets |
 | `cleanup <data\|images\|kilo\|claude\|all>` | Remove specific local state or client configs |
 | `uninstall` | Stop services, remove all data/images/configs, remove headway itself |
@@ -230,11 +233,11 @@ Runtime state lives under this repo (gitignored):
 
 ## Images
 
-- LiteLLM (Copilot lane): `ghcr.io/berriai/litellm:main-stable`
 - Headroom: `ghcr.io/chopratejas/headroom:code` (override with `HEADROOM_IMAGE` in `.env`)
-  — one image runs both the Python proxy (`:4000`/`:4002`) and the native bedrock
-  proxy (`headroom-proxy`). The upstream `:code` image ships the binary; the bedrock
-  service overrides the entrypoint to `headroom-proxy`.
+  — the upstream `:code` image ships the native `headroom-proxy` binary; the compose
+  service sets `entrypoint: ["headroom-proxy"]` to run it as the single front door
+  for both the `:4000` and `:4002` lanes.
+- LiteLLM (optional Copilot upstream, `--profile litellm`): `ghcr.io/berriai/litellm:main-stable`
 
 ## Uninstall and Cleanup
 

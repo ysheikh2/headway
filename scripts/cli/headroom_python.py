@@ -12,13 +12,11 @@ Subcommands:
 - claude-check <vscode_settings_path> <aws_profile> <aws_region>
 - compose-image <service_name>  (reads compose JSON on stdin)
 - models-summary                (reads /v1/models JSON on stdin)
-- stats-report <raw_stats> [raw_history] [raw_combined]
-- generate-config <tmp_dir> <output_file> [copilot_token_file]
+- stats-report <raw_stats> [raw_history]
+- generate-config <output_file> [copilot_token_file]
 - build-bedrock-compression-payload <outfile>
 - build-copilot-cache-payload <outfile> <model>
 - build-copilot-compression-payload <outfile> <model>
-- select-bedrock-model          (reads /v1/models JSON on stdin)
-- select-bedrock-anthropic-model (reads /v1/models JSON on stdin)
 """
 
 from __future__ import annotations
@@ -478,56 +476,6 @@ def cmd_stats_report(raw_stats: str, raw_history: str, _raw_combined: str = "") 
     return 0
 
 
-def _slugify(value: str) -> str:
-    return re.sub(r"-+", "-", re.sub(r"[^a-z0-9]+", "-", value.lower())).strip("-")
-
-
-def _region_from_filename(path: str) -> str:
-    base = os.path.basename(path)
-    parts = base.split("-")
-    return "-".join(parts[1:4]).split(".")[0]
-
-
-def _extract_model_id_from_arn(arn: str) -> str:
-    if "/" in arn:
-        return arn.rsplit("/", 1)[-1]
-    return ""
-
-
-PREFERRED_REGION_ORDER = {
-    "eu-central-1": 0,
-    "eu-west-1": 1,
-    "eu-west-2": 2,
-    "eu-west-3": 3,
-    "eu-north-1": 4,
-    "eu-south-1": 5,
-    "eu-south-2": 6,
-}
-
-
-def _region_rank(region: str) -> int:
-    return PREFERRED_REGION_ORDER.get(region, 99)
-
-
-def _lifecycle_rank(status: str) -> int:
-    s = (status or "").upper()
-    if s == "ACTIVE":
-        return 3
-    if s == "LEGACY":
-        return 2
-    if s == "DEPRECATED":
-        return 1
-    return 0
-
-
-def _pick_better(
-    existing: tuple[str, str, str] | None, candidate: tuple[str, str, str]
-) -> tuple[str, str, str]:
-    if existing is None:
-        return candidate
-    return candidate if _region_rank(candidate[2]) < _region_rank(existing[2]) else existing
-
-
 def _fetch_copilot_models(token_file: str) -> list[str]:
     if not token_file or not os.path.exists(token_file):
         fallback_dir = os.environ.get(
@@ -602,121 +550,19 @@ def _fetch_copilot_models(token_file: str) -> list[str]:
         return []
 
 
-def cmd_generate_config(tmp_dir: str, output_file: str, copilot_token_file: str) -> int:
-    foundation_status_by_model: dict[str, str] = {}
-    foundation_best_region: dict[str, str] = {}
-    foundation_on_demand: dict[str, bool] = {}
+def cmd_generate_config(output_file: str, copilot_token_file: str) -> int:
+    """Generate a Copilot-only LiteLLM config.
 
-    for name in sorted(os.listdir(tmp_dir)):
-        if not name.startswith("foundation-") or not name.endswith(".json"):
-            continue
-        path = os.path.join(tmp_dir, name)
-        try:
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            continue
-
-        region = _region_from_filename(path)
-        for model in data.get("modelSummaries", []):
-            if not isinstance(model, dict):
-                continue
-            model_id = model.get("modelId")
-            if not model_id:
-                continue
-
-            status = ((model.get("modelLifecycle") or {}).get("status") or "").upper()
-            old_status = foundation_status_by_model.get(model_id, "")
-            if _lifecycle_rank(status) > _lifecycle_rank(old_status):
-                foundation_status_by_model[model_id] = status
-
-            inf_types = {str(x).upper() for x in model.get("inferenceTypesSupported", [])}
-            foundation_on_demand[model_id] = foundation_on_demand.get(model_id, False) or (
-                "ON_DEMAND" in inf_types
-            )
-
-            prior_region = foundation_best_region.get(model_id)
-            if prior_region is None or _region_rank(region) < _region_rank(prior_region):
-                foundation_best_region[model_id] = region
-
-    selected: dict[str, tuple[str, str, str]] = {}
-    covered_model_ids: set[str] = set()
-
-    for name in sorted(os.listdir(tmp_dir)):
-        if not name.startswith("inference-") or not name.endswith(".json"):
-            continue
-        path = os.path.join(tmp_dir, name)
-        try:
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            continue
-
-        region = _region_from_filename(path)
-        for summary in data.get("inferenceProfileSummaries", []):
-            if not isinstance(summary, dict):
-                continue
-            status = (summary.get("status") or "").upper()
-            if status and status != "ACTIVE":
-                continue
-            profile_id = summary.get("inferenceProfileId")
-            if not profile_id:
-                continue
-            if not (
-                str(profile_id).startswith("eu.")
-                or str(profile_id).startswith("global.")
-                or region.startswith("eu-")
-            ):
-                continue
-
-            referenced_ids: list[str] = []
-            for model_ref in summary.get("models", []):
-                if not isinstance(model_ref, dict):
-                    continue
-                model_arn = model_ref.get("modelArn")
-                mid = _extract_model_id_from_arn(model_arn or "")
-                if mid:
-                    referenced_ids.append(mid)
-
-            if referenced_ids:
-                has_active_or_unknown = any(
-                    foundation_status_by_model.get(mid, "") in ("", "ACTIVE")
-                    for mid in referenced_ids
-                )
-                if not has_active_or_unknown:
-                    continue
-                for mid in referenced_ids:
-                    if foundation_status_by_model.get(mid, "") == "ACTIVE":
-                        covered_model_ids.add(mid)
-
-            key = f"profile::{profile_id}"
-            candidate = (
-                f"bedrock-{_slugify(str(profile_id))}",
-                f"bedrock/{profile_id}",
-                region,
-            )
-            selected[key] = _pick_better(selected.get(key), candidate)
-
-    for model_id, status in foundation_status_by_model.items():
-        if status != "ACTIVE":
-            continue
-        if not foundation_on_demand.get(model_id, False):
-            continue
-        if model_id in covered_model_ids:
-            continue
-        region = foundation_best_region.get(model_id, "eu-central-1")
-        key = f"foundation::{model_id}"
-        candidate = (f"bedrock-{_slugify(model_id)}", f"bedrock/{model_id}", region)
-        selected[key] = _pick_better(selected.get(key), candidate)
-
-    entries = sorted(selected.values(), key=lambda x: x[0])
+    Bedrock is served natively by the Rust `headroom-proxy` (SigV4 in-process), so
+    LiteLLM only fronts the GitHub Copilot / OpenAI lane. The config therefore has
+    just the auto-discovered named `copilot-*` entries plus the `*` wildcard.
+    """
     copilot_models = _fetch_copilot_models(copilot_token_file)
 
     header = """# litellm_config.yaml
 # AUTO-GENERATED by scripts/cli/generate-litellm-config.sh
 #
-# Architecture:
-#   bedrock-*   -> AWS Bedrock directly
+# Architecture (Copilot/OpenAI lane only — Bedrock is native in headroom-proxy):
 #   copilot-*   -> GitHub Copilot (named, auto-discovered)
 #   *           -> github_copilot/* (wildcard fallback)
 #
@@ -727,14 +573,6 @@ model_list:
 """
 
     lines = [header]
-
-    for alias, model, region in entries:
-        lines.append(
-            f"  - model_name: {alias}\n"
-            f"    litellm_params:\n"
-            f"      model: {model}\n"
-            f"      aws_region_name: {region}\n"
-        )
 
     for model_id in copilot_models:
         alias = "copilot-" + re.sub(r"[^a-z0-9]+", "-", model_id.lower()).strip("-")
@@ -751,8 +589,7 @@ model_list:
         f.write("".join(lines))
 
     print(f"[generator] wrote {output_file}")
-    print(f"[generator] total bedrock aliases: {len(entries)}")
-    print(f"[generator] covered by active inference profiles: {len(covered_model_ids)}")
+    print(f"[generator] named copilot aliases: {len(copilot_models)}")
     return 0
 
 
@@ -894,60 +731,6 @@ def cmd_build_copilot_compression_payload(outfile: str, model: str) -> int:
     return 0
 
 
-def cmd_select_bedrock_model() -> int:
-    """Read /v1/models JSON on stdin; print preferred bedrock model aliases, one per line."""
-    raw = sys.stdin.read().strip()
-    try:
-        data = json.loads(raw).get("data", [])
-    except Exception:
-        return 0
-    ids = [m.get("id", "") for m in data if isinstance(m, dict)]
-    preferred = [
-        "bedrock-mistral-voxtral-mini-3b-2507",
-        "bedrock-google-gemma-3-4b-it",
-        "bedrock-mistral-ministral-3-3b-instruct",
-        "bedrock-eu-amazon-nova-micro-v1-0",
-        "bedrock-eu-amazon-nova-2-lite-v1-0",
-        "bedrock-global-amazon-nova-2-lite-v1-0",
-        "bedrock-eu-amazon-nova-lite-v1-0",
-        "bedrock-openai-gpt-oss-20b-1-0",
-        "bedrock-eu-anthropic-claude-haiku-4-5-20251001-v1-0",
-        "bedrock-global-anthropic-claude-haiku-4-5-20251001-v1-0",
-    ]
-    selected = [p for p in preferred if p in ids]
-    if selected:
-        print("\n".join(selected))
-        return 0
-    fallback = [x for x in ids if x.startswith("bedrock-")]
-    print("\n".join(fallback))
-    return 0
-
-
-def cmd_select_bedrock_anthropic_model() -> int:
-    """Read /v1/models JSON on stdin; print the preferred Anthropic-on-Bedrock model alias."""
-    raw = sys.stdin.read().strip()
-    try:
-        data = json.loads(raw).get("data", [])
-    except Exception:
-        return 0
-    ids = [m.get("id", "") for m in data if isinstance(m, dict)]
-    preferred = [
-        "bedrock-eu-anthropic-claude-haiku-4-5-20251001-v1-0",
-        "bedrock-global-anthropic-claude-haiku-4-5-20251001-v1-0",
-        "bedrock-eu-anthropic-claude-sonnet-4-5-20250929-v1-0",
-        "bedrock-global-anthropic-claude-sonnet-4-5-20250929-v1-0",
-    ]
-    for p in preferred:
-        if p in ids:
-            print(p)
-            return 0
-    for x in ids:
-        if x.startswith("bedrock-") and "anthropic" in x:
-            print(x)
-            return 0
-    return 0
-
-
 def main() -> int:
     if len(sys.argv) < 2:
         print("usage: headroom_python.py <subcommand> [args...]", file=sys.stderr)
@@ -982,9 +765,9 @@ def main() -> int:
     if sub == "stats-report" and len(args) in (2, 3):
         return cmd_stats_report(args[0], args[1], args[2] if len(args) == 3 else "")
 
-    if sub == "generate-config" and len(args) in (2, 3):
-        token_file = args[2] if len(args) == 3 else ""
-        return cmd_generate_config(args[0], args[1], token_file)
+    if sub == "generate-config" and len(args) in (1, 2):
+        token_file = args[1] if len(args) == 2 else ""
+        return cmd_generate_config(args[0], token_file)
 
     if sub == "build-bedrock-compression-payload" and len(args) == 1:
         return cmd_build_bedrock_compression_payload(args[0])
@@ -992,10 +775,6 @@ def main() -> int:
         return cmd_build_copilot_cache_payload(args[0], args[1])
     if sub == "build-copilot-compression-payload" and len(args) == 2:
         return cmd_build_copilot_compression_payload(args[0], args[1])
-    if sub == "select-bedrock-model" and len(args) == 0:
-        return cmd_select_bedrock_model()
-    if sub == "select-bedrock-anthropic-model" and len(args) == 0:
-        return cmd_select_bedrock_anthropic_model()
 
     print(f"invalid arguments for subcommand: {sub}", file=sys.stderr)
     return 1

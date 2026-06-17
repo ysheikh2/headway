@@ -24,8 +24,14 @@ cd "$ROOT_DIR"
 
 PASS=0
 FAIL=0
-pass() { printf '  \033[1;32m[PASS]\033[0m %s\n' "$*"; PASS=$((PASS + 1)); }
-fail() { printf '  \033[1;31m[FAIL]\033[0m %s\n' "$*"; FAIL=$((FAIL + 1)); }
+pass() {
+  printf '  \033[1;32m[PASS]\033[0m %s\n' "$*"
+  PASS=$((PASS + 1))
+}
+fail() {
+  printf '  \033[1;31m[FAIL]\033[0m %s\n' "$*"
+  FAIL=$((FAIL + 1))
+}
 info() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 
 OPENAI_URL="http://127.0.0.1:4000"
