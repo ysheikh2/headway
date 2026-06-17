@@ -345,13 +345,13 @@ ensure_aws_session() {
 
 compose_pull() {
   docker compose -f "$COMPOSE_FILE" pull litellm
-  # headroom and headroom-bedrock share one image (HEADROOM_IMAGE). Only pull
+  # The single Rust proxy runs from HEADROOM_IMAGE. Only pull
   # from a registry — a locally-built override has no remote to fetch.
   local headroom_image
   headroom_image=$(docker compose -f "$COMPOSE_FILE" config --format json 2>/dev/null |
     python3 "$PY_HELPER" compose-image headroom 2>/dev/null || true)
   if [[ -n "$headroom_image" && "$headroom_image" == *"/"* ]]; then
-    docker compose -f "$COMPOSE_FILE" pull headroom headroom-bedrock
+    docker compose -f "$COMPOSE_FILE" pull headroom
   else
     echo "Skipping pull for local headroom image: ${headroom_image:-<unset>}"
   fi
@@ -1006,7 +1006,7 @@ cmd_auth() {
   docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
 
   # Also refresh bedrock lane.
-  docker compose -f "$COMPOSE_FILE" up -d headroom-bedrock 2>/dev/null || true
+  docker compose -f "$COMPOSE_FILE" up -d headroom 2>/dev/null || true
 
   if ! wait_for_http "$GATEWAY_URL/livez" 30 2 >/dev/null; then
     echo "ERROR: gateway failed to become healthy after auth"
@@ -1030,7 +1030,7 @@ cmd_doctor() {
   echo
 
   echo "[containers]"
-  docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep -E 'headroom-gateway|litellm-gateway|headroom-bedrock-gateway' || true
+  docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep -E 'headroom-gateway|litellm-gateway' || true
   echo
 
   echo "[health]"
@@ -1253,7 +1253,7 @@ cmd_reset() {
   require_docker
 
   docker compose -f "$COMPOSE_FILE" down --remove-orphans 2>/dev/null || true
-  docker rm -f headroom-gateway litellm-gateway headroom-bedrock-gateway 2>/dev/null || true
+  docker rm -f headroom-gateway litellm-gateway 2>/dev/null || true
 
   load_env
   require_env
@@ -1415,7 +1415,7 @@ cmd_uninstall() {
   # Stop services and wipe all state
   if docker info >/dev/null 2>&1; then
     docker compose -f "$COMPOSE_FILE" down --remove-orphans 2>/dev/null || true
-    docker rm -f headroom-gateway litellm-gateway headroom-bedrock-gateway 2>/dev/null || true
+    docker rm -f headroom-gateway litellm-gateway 2>/dev/null || true
     docker image rm "${HEADROOM_IMAGE:-$DEFAULT_HEADROOM_IMAGE}" 2>/dev/null || true
     docker image rm ghcr.io/berriai/litellm:main-stable 2>/dev/null || true
     echo "stopped containers and removed images"

@@ -10,10 +10,26 @@ Product/runtime usage details live in `README.md` and should not be duplicated h
 
 ## Repo Intent
 
-Headway is an integration/operations wrapper around upstream Headroom, providing
-a two-lane AI gateway: OpenAI-compatible (Copilot) via Headroom + LiteLLM, and
-Bedrock-native via headroom-proxy. See `docs/adr/` for architecture decisions,
-including the planned removal of the LiteLLM sidecar (ADR-0001).
+Headway is an integration/operations wrapper around upstream Headroom. This
+branch refactors it to a **single native Rust `headroom-proxy`** as the one
+front door for every lane:
+
+- OpenAI-compatible / Copilot lane: `:4000/v1` -> proxy -> LiteLLM upstream.
+- Bedrock lane: `:4002/model/{id}/invoke` -> proxy native SigV4 -> AWS.
+
+The proxy compresses every lane, signs Bedrock natively, and serves a single
+**unified `/stats` + `/dashboard`** across all backends (one process -> one
+store), so there is no Python proxy, no `headroom-bedrock` sidecar, and no
+runtime patches (`unified_stats_patch` / `bedrock_native_patch` are deleted).
+LiteLLM stays only as the Copilot/OpenAI upstream + its auth.
+
+Validate with `bash scripts/cli/test-rust-stats.sh` (build the headroom branch
+image first; see the comment header in that script).
+
+> Follow-ups not yet done on this branch: the `headway` CLI's stats aggregation
+> (`scripts/cli/headroom_python.py`) and `config regen` still assume the old
+> two-process split — they should be simplified to read the unified `/stats`
+> directly and to generate a Copilot-only LiteLLM config (Bedrock is native now).
 
 ## Non-Negotiable Rules
 
