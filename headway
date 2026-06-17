@@ -1105,8 +1105,9 @@ cmd_doctor() {
 }
 
 cmd_stats() {
-  local raw_combined raw_stats raw_history
-  raw_combined=$(python3 "$PY_HELPER" combined-stats 2>/dev/null || true)
+  # The single Rust proxy serves the unified /stats across every backend, so we
+  # fetch it directly — no per-lane merge needed.
+  local raw_stats raw_history
   raw_stats=$(curl -sS --max-time 8 "$GATEWAY_URL/stats" 2>/dev/null || true)
   raw_history=$(curl -sS --max-time 8 "$GATEWAY_URL/stats-history" 2>/dev/null || true)
 
@@ -1115,7 +1116,7 @@ cmd_stats() {
     exit 1
   fi
 
-  python3 "$PY_HELPER" stats-report "$raw_stats" "$raw_history" "$raw_combined"
+  python3 "$PY_HELPER" stats-report "$raw_stats" "$raw_history"
 }
 
 cmd_config() {
