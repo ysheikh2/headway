@@ -23,8 +23,12 @@ store), so there is no Python proxy, no `headroom-bedrock` sidecar, and no
 runtime patches (`unified_stats_patch` / `bedrock_native_patch` are deleted).
 LiteLLM stays only as the Copilot/OpenAI upstream + its auth.
 
-Validate with `headway test` (which runs `scripts/cli/test-rust-stats.sh`; build
-the headroom branch image first — see the comment header in that script).
+Validate with `headway test` (which runs `scripts/cli/test-rust-stats.sh`). The
+default `HEADROOM_IMAGE` (`:code`) already ships the `headroom-proxy` binary, so
+no local build is needed in steady state. Only while the stats/dashboard work is
+still on the headroom `feat/federated-stats` branch (not yet in `:code`) do you
+build that branch's image and point `HEADROOM_IMAGE` at it — the script's comment
+header shows how.
 
 The `headway` CLI is fully aligned to the single-proxy model: `headway stats`
 reads the unified `/stats` directly, and `headway config regen` generates a

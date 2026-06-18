@@ -188,10 +188,10 @@ Windows users running VS Code natively (not VS Code Remote) should point `CLAUDE
 headway auth
 ```
 
-**Stale or missing Bedrock model aliases:**
+**Stale or missing Copilot models in the gateway:**
 
 ```bash
-headway config regen
+headway config regen   # regenerates the Copilot-only litellm config
 headway up
 ```
 
@@ -210,7 +210,7 @@ headway reset
 
 ### Bedrock native lane
 
-`:4002` traffic passes through Headway's Python patch before Rust SigV4 forwarding. For Anthropic Bedrock models, Headway applies compression, compression-cache reuse across turns, and optional `cache_control` marker placement (`HEADWAY_BEDROCK_AUTO_CACHE_CONTROL=1`).
+`:4002` traffic is compressed and signed natively in the Rust `headroom-proxy` (SigV4 in-process — no Python patch). For Anthropic Bedrock models the proxy's live-zone compressor applies compression and `cache_control`-aware handling before forwarding to AWS.
 
 Bedrock savings metrics roll into unified `headway stats` output and the dashboard alongside Copilot data.
 

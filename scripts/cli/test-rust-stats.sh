@@ -20,7 +20,10 @@
 set -uo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$ROOT_DIR"
+cd "$ROOT_DIR" || exit 1
+
+# Bounded curl: never let a stalled socket/DNS/AWS path hang `headway test`.
+CURL=(curl --connect-timeout 5 --max-time 15)
 
 PASS=0
 FAIL=0
@@ -52,14 +55,15 @@ for _ in $(seq 1 20); do
 done
 
 # 1. Liveness
-if curl -sf "$OPENAI_URL/healthz" | grep -q '"ok":true'; then
+if "${CURL[@]}" -sf "$OPENAI_URL/healthz" |
+  python3 -c "import json,sys; sys.exit(0 if json.load(sys.stdin).get('ok') is True else 1)" 2>/dev/null; then
   pass "/healthz responds from the Rust proxy"
 else
   fail "/healthz did not respond"
 fi
 
 # 2. /stats native unified contract
-STATS="$(curl -sf "$OPENAI_URL/stats" || true)"
+STATS="$("${CURL[@]}" -sf "$OPENAI_URL/stats" || true)"
 if echo "$STATS" | python3 -c "import json,sys; d=json.load(sys.stdin); assert 'requests' in d and 'tokens' in d and 'cost' in d and 'persistent_savings' in d" 2>/dev/null; then
   pass "/stats serves the unified savings contract natively (no Python proxy, no patches)"
 else
@@ -67,7 +71,7 @@ else
 fi
 
 # 3. /dashboard embedded HTML
-DASH_CODE="$(curl -s -o /tmp/hw_dash.html -w '%{http_code}' "$BEDROCK_URL/dashboard")"
+DASH_CODE="$("${CURL[@]}" -s -o /tmp/hw_dash.html -w '%{http_code}' "$BEDROCK_URL/dashboard")"
 if [ "$DASH_CODE" = "200" ] && grep -q "/stats" /tmp/hw_dash.html; then
   pass "/dashboard serves the embedded UI that polls /stats"
 else
@@ -78,11 +82,11 @@ rm -f /tmp/hw_dash.html
 # 4. Recorder attributes a Bedrock request in the unified /stats.
 #    The recorder fires before SigV4 signing, so this holds even without creds.
 BR_MODEL="eu.anthropic.claude-haiku-4-5-20251001-v1:0"
-BEFORE="$(curl -sf "$OPENAI_URL/stats" | python3 -c "import json,sys;print(json.load(sys.stdin)['requests']['total'])" 2>/dev/null || echo 0)"
-curl -s -o /dev/null -X POST "$BEDROCK_URL/model/$BR_MODEL/invoke" \
+BEFORE="$("${CURL[@]}" -sf "$OPENAI_URL/stats" | python3 -c "import json,sys;print(json.load(sys.stdin)['requests']['total'])" 2>/dev/null || echo 0)"
+"${CURL[@]}" --max-time 30 -s -o /dev/null -X POST "$BEDROCK_URL/model/$BR_MODEL/invoke" \
   -H "content-type: application/json" \
   -d '{"anthropic_version":"bedrock-2023-05-31","messages":[{"role":"user","content":"hi"}],"max_tokens":10}'
-AFTER_JSON="$(curl -sf "$OPENAI_URL/stats")"
+AFTER_JSON="$("${CURL[@]}" -sf "$OPENAI_URL/stats")"
 AFTER="$(echo "$AFTER_JSON" | python3 -c "import json,sys;print(json.load(sys.stdin)['requests']['total'])" 2>/dev/null || echo 0)"
 BR_COUNT="$(echo "$AFTER_JSON" | python3 -c "import json,sys;print(json.load(sys.stdin)['requests']['by_provider'].get('bedrock',0))" 2>/dev/null || echo 0)"
 if [ "$AFTER" -gt "$BEFORE" ] && [ "$BR_COUNT" -ge 1 ]; then
