@@ -77,7 +77,10 @@ services:
       - "--memory"
       - "--code-aware"
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8787/livez"]
+      # The upstream :code image ships no curl/sh, only python3; `-S` skips site
+      # customization so the probe never triggers headroom's onnxruntime init
+      # (which SIGABRTs under the Docker VM and would fail the healthcheck).
+      test: ["CMD", "python3", "-S", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8787/livez', timeout=5).read()"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -115,7 +118,10 @@ services:
       - "--bedrock-region"
       - "${AWS_REGION:?AWS_REGION must be set — run 'headway init'}"
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8787/healthz"]
+      # The upstream :code image ships no curl/sh, only python3; `-S` skips site
+      # customization so the probe never triggers headroom's onnxruntime init
+      # (which SIGABRTs under the Docker VM and would fail the healthcheck).
+      test: ["CMD", "python3", "-S", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8787/healthz', timeout=5).read()"]
       interval: 30s
       timeout: 5s
       retries: 3
