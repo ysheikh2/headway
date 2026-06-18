@@ -95,6 +95,38 @@ else
   fail "Bedrock request not recorded in /stats (total ${BEFORE} -> ${AFTER}, bedrock=${BR_COUNT})"
 fi
 
+# 5. OpenAI-compatible / Copilot lane (:4000/v1) — optional.
+#    Requires the LiteLLM upstream (`--profile litellm`) with Copilot auth, which
+#    is interactive, so the probe runs only when a copilot-* model is loaded and
+#    otherwise skips (keeps `headway test` green in CI / Bedrock-only setups).
+COPILOT_MODEL="$("${CURL[@]}" -sf "http://127.0.0.1:4001/v1/models" 2>/dev/null |
+  python3 -c "import json,sys
+try:
+    ids=[m['id'] for m in json.load(sys.stdin).get('data',[]) if str(m.get('id','')).startswith('copilot-')]
+except Exception:
+    ids=[]
+# Prefer a cheap model so an accidental 200 doesn't bill an expensive one.
+# Match on '-'-delimited segments so 'mini' doesn't false-hit 'geMINI'.
+cheap_tokens={'flash','mini','nano','haiku','lite'}
+cheap=[i for i in ids if cheap_tokens & set(i.split('-'))]
+print((cheap or ids or [''])[0])" 2>/dev/null || echo "")"
+if [ -z "$COPILOT_MODEL" ]; then
+  info "Copilot/OpenAI lane not configured (no copilot-* model) — skipping lane probe"
+else
+  OAI_BEFORE="$("${CURL[@]}" -sf "$OPENAI_URL/stats" |
+    python3 -c "import json,sys;print(json.load(sys.stdin)['requests']['by_provider'].get('openai',0))" 2>/dev/null || echo 0)"
+  OAI_CODE="$("${CURL[@]}" --max-time 40 -s -o /dev/null -w '%{http_code}' -X POST "$OPENAI_URL/v1/chat/completions" \
+    -H "content-type: application/json" \
+    -d "{\"model\":\"$COPILOT_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ok\"}],\"max_tokens\":8}")"
+  OAI_AFTER="$("${CURL[@]}" -sf "$OPENAI_URL/stats" |
+    python3 -c "import json,sys;print(json.load(sys.stdin)['requests']['by_provider'].get('openai',0))" 2>/dev/null || echo 0)"
+  if [ "$OAI_AFTER" -gt "$OAI_BEFORE" ]; then
+    pass "Copilot/OpenAI lane routed + recorded ($COPILOT_MODEL, HTTP $OAI_CODE): by_provider.openai ${OAI_BEFORE} -> ${OAI_AFTER}"
+  else
+    fail "Copilot/OpenAI lane request not recorded (model $COPILOT_MODEL, HTTP $OAI_CODE, openai ${OAI_BEFORE} -> ${OAI_AFTER})"
+  fi
+fi
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

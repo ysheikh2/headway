@@ -321,7 +321,7 @@ def _load_json_str(raw: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def cmd_stats_report(raw_stats: str, raw_history: str, _raw_combined: str = "") -> int:
+def cmd_stats_report(raw_stats: str, raw_history: str = "", _raw_combined: str = "") -> int:
     """Render the unified savings report from the single Rust proxy's `/stats`.
 
     The Rust proxy fronts every backend in one process, so `/stats` is already
@@ -418,12 +418,16 @@ def _fetch_copilot_models(token_file: str) -> list[str]:
         with open(token_file, encoding="utf-8") as fh:
             key_data = json.load(fh)
 
-        token = key_data.get("token") or key_data.get("api_key")
-        if not token and isinstance(key_data, dict):
-            for value in key_data.values():
-                if isinstance(value, str) and value.strip():
-                    token = value.strip()
-                    break
+        token = ""
+        if isinstance(key_data, dict):
+            token = key_data.get("token") or key_data.get("api_key") or ""
+            if not token:
+                for value in key_data.values():
+                    if isinstance(value, str) and value.strip():
+                        token = value.strip()
+                        break
+        elif isinstance(key_data, str):
+            token = key_data.strip()
 
         if not token:
             print(
@@ -686,8 +690,10 @@ def main() -> int:
     if sub == "models-summary" and len(args) == 0:
         return cmd_models_summary()
 
-    if sub == "stats-report" and len(args) in (2, 3):
-        return cmd_stats_report(args[0], args[1], args[2] if len(args) == 3 else "")
+    if sub == "stats-report" and len(args) in (1, 2, 3):
+        raw_history = args[1] if len(args) >= 2 else ""
+        raw_combined = args[2] if len(args) == 3 else ""
+        return cmd_stats_report(args[0], raw_history, raw_combined)
 
     if sub == "generate-config" and len(args) in (1, 2):
         token_file = args[1] if len(args) == 2 else ""
