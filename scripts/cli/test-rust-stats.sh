@@ -87,7 +87,8 @@ fi
 rm -f /tmp/hw_dash.html
 
 # 4. Recorder attributes a Bedrock request in the unified /stats.
-#    The recorder fires before SigV4 signing, so this holds even without creds.
+#    The request is recorded once the upstream result is known (so requests.failed
+#    is accurate); the attribution holds whether the call succeeds or fails.
 BR_MODEL="eu.anthropic.claude-haiku-4-5-20251001-v1:0"
 BEFORE="$("${CURL[@]}" -sf "$OPENAI_URL/stats" | python3 -c "import json,sys;print(json.load(sys.stdin)['requests']['total'])" 2>/dev/null || echo 0)"
 "${CURL[@]}" --max-time 30 -s -o /dev/null -X POST "$BEDROCK_URL/model/$BR_MODEL/invoke" \
