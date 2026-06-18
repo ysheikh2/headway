@@ -17,6 +17,10 @@ OUTPUT_FILE="$DIR/litellm_config.yaml"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --output)
+      if [[ $# -lt 2 || -z "$2" ]]; then
+        echo "ERROR: --output requires a non-empty path"
+        exit 1
+      fi
       OUTPUT_FILE="$2"
       shift 2
       ;;

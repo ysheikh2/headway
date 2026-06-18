@@ -327,7 +327,20 @@ def cmd_stats_report(raw_stats: str, raw_history: str = "", _raw_combined: str =
     The Rust proxy fronts every backend in one process, so `/stats` is already
     unified across providers/models — there is no per-lane merge to do here.
     """
-    stats = _load_json_str(raw_stats)
+    # Fail fast on a non-empty but unparseable /stats payload — a zeroed report
+    # would otherwise mask an upstream fetch failure. An empty string (no data
+    # yet) still renders a zeroed report.
+    stats: dict[str, Any] = {}
+    if raw_stats.strip():
+        try:
+            parsed = json.loads(raw_stats)
+        except json.JSONDecodeError as exc:
+            print(f"ERROR: /stats payload is not valid JSON: {exc}", file=sys.stderr)
+            return 1
+        if not isinstance(parsed, dict):
+            print("ERROR: /stats payload is not a JSON object", file=sys.stderr)
+            return 1
+        stats = parsed
     _ = _load_json_str(raw_history)  # reserved for future trend output
 
     requests = stats.get("requests", {}) or {}
