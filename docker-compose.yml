@@ -106,6 +106,8 @@ services:
       - AWS_DEFAULT_REGION=${AWS_REGION:?AWS_REGION must be set — run 'headway init'}
       - AWS_CONFIG_FILE=/home/nonroot/.aws/config
       - AWS_SHARED_CREDENTIALS_FILE=/home/nonroot/.aws/credentials
+      # SSO token cache (~/.aws/sso/cache) resolves via $HOME — point it at the mount.
+      - HOME=/home/nonroot
       - HEADROOM_PROXY_AWS_PROFILE=${BEDROCK_AWS_PROFILE:?BEDROCK_AWS_PROFILE must be set — run 'headway init'}
       - HEADROOM_PROXY_BEDROCK_REGION=${AWS_REGION:?AWS_REGION must be set — run 'headway init'}
     command:
