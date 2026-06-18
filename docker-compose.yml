@@ -74,7 +74,11 @@ services:
       - HEADROOM_PROXY_BEDROCK_REGION=${AWS_REGION:?AWS_REGION must be set — run 'headway init'}
       - HEADROOM_TELEMETRY=off
       # Compression tuning (live-zone). Mirror prior headway agent-friendly knobs.
+      # NOTE: --compression is the master switch; --compression-mode selects the
+      # live-zone dispatcher. Both are required — the master switch alone leaves
+      # the compressor in byte-faithful passthrough (compression_mode=off).
       - HEADROOM_PROXY_COMPRESSION=1
+      - HEADROOM_PROXY_COMPRESSION_MODE=live_zone
       - HEADROOM_PROXY_SAVINGS_PROFILE=${HEADROOM_PROXY_SAVINGS_PROFILE:-agent-90}
       # Durable savings store backing the unified /stats + /dashboard.
       - HEADROOM_PROXY_SAVINGS_PATH=/home/nonroot/.headroom/proxy_savings.json
@@ -95,6 +99,9 @@ services:
       - "${BEDROCK_AWS_PROFILE:?BEDROCK_AWS_PROFILE must be set — run 'headway init'}"
       # Compress LLM-shaped requests on the catch-all (Anthropic/OpenAI) lane.
       - "--compression"
+      # Select the live-zone compressor (off => byte-faithful passthrough).
+      - "--compression-mode"
+      - "live_zone"
       # Persist the unified savings aggregate across restarts.
       - "--savings-path"
       - "/home/nonroot/.headroom/proxy_savings.json"
