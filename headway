@@ -491,7 +491,7 @@ except Exception:
     echo "Refreshing model config to include Copilot models..."
     generate_config
     docker compose -f "$COMPOSE_FILE" restart litellm 2>/dev/null || true
-    wait_for_http "$GATEWAY_URL/livez" 30 2 >/dev/null ||
+    wait_for_http "$GATEWAY_URL/healthz" 30 2 >/dev/null ||
       echo "WARNING: gateway did not become healthy after Copilot re-auth"
   else
     # No "expired" log — possibly no Copilot config (init ran before auth).
@@ -823,13 +823,13 @@ cmd_up() {
   echo
   echo "--- Waiting for gateway to become healthy ---"
   echo
-  if ! wait_for_http "$GATEWAY_URL/livez" 30 2 >/dev/null; then
-    echo "ERROR: gateway did not become healthy at $GATEWAY_URL/livez"
+  if ! wait_for_http "$GATEWAY_URL/healthz" 30 2 >/dev/null; then
+    echo "ERROR: gateway did not become healthy at $GATEWAY_URL/healthz"
     echo "       Check logs: docker logs litellm-gateway"
     exit 1
   fi
-  if ! wait_for_http "$BEDROCK_URL/livez" 30 2 >/dev/null; then
-    echo "ERROR: bedrock lane did not become healthy at $BEDROCK_URL/livez"
+  if ! wait_for_http "$BEDROCK_URL/healthz" 30 2 >/dev/null; then
+    echo "ERROR: bedrock lane did not become healthy at $BEDROCK_URL/healthz"
     exit 1
   fi
 
@@ -872,11 +872,11 @@ cmd_update() {
     docker compose -f "$COMPOSE_FILE" restart litellm 2>/dev/null || true
   fi
 
-  if ! wait_for_http "$GATEWAY_URL/livez" 30 2 >/dev/null; then
+  if ! wait_for_http "$GATEWAY_URL/healthz" 30 2 >/dev/null; then
     echo "ERROR: gateway failed health check after update"
     exit 1
   fi
-  if ! wait_for_http "$BEDROCK_URL/livez" 30 2 >/dev/null; then
+  if ! wait_for_http "$BEDROCK_URL/healthz" 30 2 >/dev/null; then
     echo "ERROR: bedrock lane failed health check after update"
     exit 1
   fi
@@ -914,12 +914,12 @@ cmd_restart() {
     docker compose -f "$COMPOSE_FILE" restart headroom 2>/dev/null || true
   fi
 
-  if ! wait_for_http "$GATEWAY_URL/livez" 30 2 >/dev/null; then
-    echo "ERROR: gateway did not become healthy at $GATEWAY_URL/livez"
+  if ! wait_for_http "$GATEWAY_URL/healthz" 30 2 >/dev/null; then
+    echo "ERROR: gateway did not become healthy at $GATEWAY_URL/healthz"
     exit 1
   fi
-  if ! wait_for_http "$BEDROCK_URL/livez" 30 2 >/dev/null; then
-    echo "ERROR: bedrock lane did not become healthy at $BEDROCK_URL/livez"
+  if ! wait_for_http "$BEDROCK_URL/healthz" 30 2 >/dev/null; then
+    echo "ERROR: bedrock lane did not become healthy at $BEDROCK_URL/healthz"
     exit 1
   fi
 
@@ -985,7 +985,7 @@ cmd_auth() {
   # Also refresh bedrock lane.
   docker compose -f "$COMPOSE_FILE" up -d headroom 2>/dev/null || true
 
-  if ! wait_for_http "$GATEWAY_URL/livez" 30 2 >/dev/null; then
+  if ! wait_for_http "$GATEWAY_URL/healthz" 30 2 >/dev/null; then
     echo "ERROR: gateway failed to become healthy after auth"
     echo "       Check logs: docker logs litellm-gateway"
     exit 1
@@ -1012,8 +1012,8 @@ cmd_doctor() {
 
   echo "[health]"
   local live bedrock
-  live=$(curl -sf --max-time 5 "$GATEWAY_URL/livez" 2>/dev/null || true)
-  bedrock=$(curl -sf --max-time 5 "$BEDROCK_URL/livez" 2>/dev/null || true)
+  live=$(curl -sf --max-time 5 "$GATEWAY_URL/healthz" 2>/dev/null || true)
+  bedrock=$(curl -sf --max-time 5 "$BEDROCK_URL/healthz" 2>/dev/null || true)
   if [[ -n "$live" ]]; then
     echo "copilot lane healthy: yes"
   else
@@ -1233,12 +1233,12 @@ cmd_reset() {
     docker compose -f "$COMPOSE_FILE" restart litellm 2>/dev/null || true
   fi
 
-  if ! wait_for_http "$GATEWAY_URL/livez" 30 2 >/dev/null; then
-    echo "ERROR: gateway did not become healthy at $GATEWAY_URL/livez"
+  if ! wait_for_http "$GATEWAY_URL/healthz" 30 2 >/dev/null; then
+    echo "ERROR: gateway did not become healthy at $GATEWAY_URL/healthz"
     exit 1
   fi
-  if ! wait_for_http "$BEDROCK_URL/livez" 30 2 >/dev/null; then
-    echo "ERROR: bedrock lane did not become healthy at $BEDROCK_URL/livez"
+  if ! wait_for_http "$BEDROCK_URL/healthz" 30 2 >/dev/null; then
+    echo "ERROR: bedrock lane did not become healthy at $BEDROCK_URL/healthz"
     exit 1
   fi
 
@@ -1418,6 +1418,12 @@ cmd_uninstall() {
 cmd_test() {
   require_cmd python3
   require_docker
+  # Load .env (and clear inherited shell vars) so the smoke test's
+  # `docker compose up` interpolates the repo config deterministically rather
+  # than whatever AWS_* happen to be in the parent shell. require_env ensures
+  # the compose `${VAR:?}` guards won't abort mid-bringup.
+  load_env
+  require_env
   # Single-proxy smoke test: /healthz, unified /stats, /dashboard, and the
   # Bedrock recorder — all served natively by headroom-proxy.
   exec bash "$ROOT_DIR/scripts/cli/test-rust-stats.sh" "$@"
