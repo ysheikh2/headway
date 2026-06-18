@@ -10,10 +10,30 @@ Product/runtime usage details live in `README.md` and should not be duplicated h
 
 ## Repo Intent
 
-Headway is an integration/operations wrapper around upstream Headroom, providing
-a two-lane AI gateway: OpenAI-compatible (Copilot) via Headroom + LiteLLM, and
-Bedrock-native via headroom-proxy. See `docs/adr/` for architecture decisions,
-including the planned removal of the LiteLLM sidecar (ADR-0001).
+Headway is an integration/operations wrapper around upstream Headroom. This
+branch refactors it to a **single native Rust `headroom-proxy`** as the one
+front door for every lane:
+
+- OpenAI-compatible / Copilot lane: `:4000/v1` -> proxy -> LiteLLM upstream.
+- Bedrock lane: `:4002/model/{id}/invoke` -> proxy native SigV4 -> AWS.
+
+The proxy compresses every lane, signs Bedrock natively, and serves a single
+**unified `/stats` + `/dashboard`** across all backends (one process -> one
+store), so there is no Python proxy, no `headroom-bedrock` sidecar, and no
+runtime patches (`unified_stats_patch` / `bedrock_native_patch` are deleted).
+LiteLLM stays only as the Copilot/OpenAI upstream + its auth.
+
+Validate with `headway test` (which runs `scripts/cli/test-rust-stats.sh`). The
+default `HEADROOM_IMAGE` (`:code`) already ships the `headroom-proxy` binary, so
+no local build is needed in steady state. Only while the stats/dashboard work is
+still on the headroom `feat/federated-stats` branch (not yet in `:code`) do you
+build that branch's image and point `HEADROOM_IMAGE` at it — the script's comment
+header shows how.
+
+The `headway` CLI is fully aligned to the single-proxy model: `headway stats`
+reads the unified `/stats` directly, and `headway config regen` generates a
+**Copilot-only** LiteLLM config (Bedrock is native in `headroom-proxy`, so there
+is no Bedrock model discovery and no `bedrock-*` aliases).
 
 ## Non-Negotiable Rules
 
@@ -22,7 +42,8 @@ including the planned removal of the LiteLLM sidecar (ADR-0001).
 3. Preserve the two-lane model:
    - OpenAI-compatible/Copilot lane via `http://127.0.0.1:4000/v1`
    - Bedrock-native lane via `http://127.0.0.1:4002`
-4. Do not assume stale model names remain valid; prefer discovery/regen flows.
+4. Both lanes are served by the one `headroom-proxy` process; Bedrock is signed
+   natively (SigV4) and never routed through LiteLLM.
 
 ## Code Organization Preferences (Important)
 
@@ -45,34 +66,33 @@ When debugging provider failures, test Copilot/OpenAI-compatible and Bedrock-nat
 
 - `headway` — main CLI script
 - `install.sh` — one-line installer (clones repo, symlinks `headway`, sets up shell completion)
-- `docker-compose.yml`
-- `litellm_config.yaml` — LiteLLM model/provider config (Copilot lane; see ADR-0001 for planned removal)
+- `docker-compose.yml` — single `headroom` (Rust proxy) service; `litellm` is an optional profile
+- `litellm_config.yaml` — Copilot-only LiteLLM config (the Copilot/OpenAI upstream)
 - `scripts/cli/headroom_python.py` — shared Python helpers for CLI commands
-- `scripts/cli/generate-litellm-config.sh` — Bedrock model discovery and config generation
+- `scripts/cli/generate-litellm-config.sh` — generates the Copilot-only LiteLLM config
 - `scripts/cli/headway-completion.bash` — bash/zsh tab-completion script (sourced at init time)
 - `scripts/cli/headway-unit-test.sh` — CLI unit tests (no live services required)
-- `scripts/cli/test.sh` — full end-to-end smoke tests
-- `scripts/runtime/headroom/headroom_patch/unified_stats_patch.py` — unified stats merge (Copilot + Bedrock native)
-- `scripts/runtime/headroom/dashboard.html` — web dashboard (served as read-only bind mount, no restart needed)
+- `scripts/cli/test-rust-stats.sh` — single-proxy smoke test (`headway test`)
 
 ## Practical Maintenance Notes
 
-- Keep Bedrock alias mapping flow driven by `headway config regen`.
+- `headway config regen` regenerates the Copilot-only LiteLLM config (no Bedrock
+  discovery — Bedrock is native in `headroom-proxy`).
 - Keep edits minimal and targeted; avoid duplicating README runbook content here.
 - `headway` reads only from `.env` — never inherit AWS env vars from the shell; `load_env` unsets all headway-managed vars before sourcing `.env`.
 - `require_env` validates `AWS_PROFILE` and `AWS_REGION`. `BEDROCK_AWS_PROFILE` is not checked by `require_env` (it defaults to `AWS_PROFILE` in the shell and questionnaire), but `docker-compose.yml` does require it via `${BEDROCK_AWS_PROFILE:?}`; `.env.template` ensures it is always written during `headway init`.
 
 ## CI / Docker Build Triggers
 
-Both `headroom` and `headroom-bedrock` compose services run from `HEADROOM_IMAGE`
-(`ghcr.io/chopratejas/headroom:code`). The upstream `:code` image ships the native
-`headroom-proxy` binary (headroom #999); the bedrock service overrides the entrypoint
-to run it. No headway-side Docker build workflow is required.
+The single `headroom` compose service runs from `HEADROOM_IMAGE`
+(`ghcr.io/chopratejas/headroom:code`) with `entrypoint: ["headroom-proxy"]`. The
+upstream `:code` image ships the native `headroom-proxy` binary, which fronts
+every lane (Copilot/OpenAI via the optional LiteLLM upstream, Bedrock via native
+SigV4) and serves the unified `/stats` + `/dashboard`. No headway-side Docker
+build workflow is required, and there are no runtime patches.
 
-The native bedrock proxy emits Bedrock EventStream framing because `bedrock_native_patch`
-sets `Accept: application/vnd.amazon.eventstream` on streaming forwards — no source patch
-to the binary is required.
-
-The `sync-upstream-headroom` workflow runs weekly (Mondays) and auto-creates a PR when the upstream
-dashboard template changes. GitHub Actions is permitted to create PRs in this repo
+The dashboard is embedded in the `headroom-proxy` binary and served at `/dashboard`;
+headway no longer vendors or syncs a dashboard template, so the old
+`sync-upstream-headroom` workflow and `scripts/runtime/headroom/` tree are gone.
+GitHub Actions is permitted to create PRs in this repo
 (`can_approve_pull_request_reviews: true` is set at the repo level).

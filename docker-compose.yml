@@ -1,21 +1,22 @@
-# Headroom gateway — Docker Compose
+# Headroom gateway — Docker Compose (single Rust proxy front door)
 #
-# Architecture:
-#   Kilo (Copilot)  -> Headroom :4000 -> LiteLLM :4001 -> GitHub Copilot
-#   Kilo (Bedrock)  -> Headroom :4002 -> headroom-proxy (SigV4) -> AWS Bedrock
+# Architecture (one process fronts every lane):
+#   Kilo (Copilot / OpenAI) -> headroom :4000 -> LiteLLM -> GitHub Copilot
+#   Claude Code (Bedrock)   -> headroom :4002 -> native SigV4 -> AWS Bedrock
 #
-# Both the Python proxy (headroom) and the native bedrock proxy (headroom-bedrock)
-# run from a SINGLE image, HEADROOM_IMAGE. Upstream headroom :code bundles the
-# native `headroom-proxy` binary; the bedrock service just overrides the
-# entrypoint. The native proxy emits Bedrock EventStream framing because
-# bedrock_native_patch sets the matching Accept header on streaming forwards.
-# Runtime state is persisted in-repo under .data/ (gitignored).
-# Headroom state is intentionally shared across :4000 and :4002 lanes.
+# The native Rust `headroom-proxy` binary (shipped in HEADROOM_IMAGE) is the
+# ONLY gateway: it compresses every lane, signs Bedrock with SigV4 natively, and
+# serves a single unified `/stats` JSON + `/dashboard` across all backends —
+# because everything flows through one process. No Python proxy, no runtime
+# patches, no cross-process stats federation. The two host ports (:4000, :4002)
+# both map to the one proxy; it routes by path (`/v1/*` -> upstream LiteLLM;
+# `/model/{id}/invoke[-with-response-stream]` -> native Bedrock).
 #
-# LiteLLM is optional (profile: litellm). Start without it for Bedrock-only use:
-#   docker compose up
-# Include LiteLLM for the Copilot lane:
-#   docker compose --profile litellm up
+# Runtime state (savings history) is persisted in-repo under .data/ (gitignored).
+#
+# LiteLLM is optional (profile: litellm) — it only provides the Copilot/OpenAI
+# upstream + its auth. Bedrock needs no LiteLLM. Start Bedrock-only with
+# `docker compose up`; add the Copilot lane with `docker compose --profile litellm up`.
 
 services:
   litellm:
@@ -52,74 +53,72 @@ services:
     image: ${HEADROOM_IMAGE:-ghcr.io/chopratejas/headroom:code}
     container_name: headroom-gateway
     restart: unless-stopped
+    # The single front door: the native Rust proxy, not the Python entrypoint.
+    entrypoint: ["headroom-proxy"]
     ports:
       - "127.0.0.1:4000:8787"
       - "127.0.0.1:4002:8787"
     environment:
-      - HEADROOM_TELEMETRY=off
-      - HEADROOM_BEDROCK_STATS_URL=http://headroom-bedrock:8787/stats
-      - HEADROOM_BEDROCK_METRICS_URL=http://headroom-bedrock:8787/metrics
-      - HEADROOM_COMPRESS_USER_MESSAGES
-      - HEADROOM_MIN_TOKENS
-      - HEADROOM_PROTECT_RECENT
-      - HEADWAY_BEDROCK_AUTO_CACHE_CONTROL=${HEADWAY_BEDROCK_AUTO_CACHE_CONTROL:-1}
-      - HEADROOM_BEDROCK_PROXY_URL=http://headroom-bedrock:8787
-      - HEADWAY_BEDROCK_DEBUG_COMPRESS=${HEADWAY_BEDROCK_DEBUG_COMPRESS:-0}
-    entrypoint: ["python", "-m", "headroom.cli", "proxy"]
-    command:
-      - "--host"
-      - "0.0.0.0"
-      - "--port"
-      - "8787"
-      - "--openai-api-url"
-      - "http://litellm:4000/v1"
-      - "--no-rate-limit"
-      - "--memory"
-      - "--code-aware"
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8787/livez"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-    volumes:
-      - ./.data/headroom:/home/nonroot/.headroom
-      - ./scripts/runtime/headroom/headroom_patch:/usr/local/lib/python3.13/site-packages/headroom_patch:ro
-      - ./scripts/runtime/headroom/usercustomize.py:/usr/local/lib/python3.13/site-packages/usercustomize.py:ro
-      - ./scripts/runtime/headroom/dashboard.html:/usr/local/lib/python3.13/site-packages/headroom/dashboard/templates/dashboard.html:ro
-
-  headroom-bedrock:
-    image: ${HEADROOM_IMAGE:-ghcr.io/chopratejas/headroom:code}
-    container_name: headroom-bedrock-gateway
-    restart: unless-stopped
-    # Same image as the headroom service; run the native Rust proxy instead of
-    # the Python entrypoint. The binary ships inside the image (headroom #999).
-    entrypoint: ["headroom-proxy"]
-    expose:
-      - "8787"
-    environment:
+      # AWS creds for native Bedrock SigV4 signing. Explicit file paths so the
+      # SDK resolves them regardless of the container's $HOME.
       - AWS_PROFILE=${BEDROCK_AWS_PROFILE:?BEDROCK_AWS_PROFILE must be set — run 'headway init'}
       - AWS_REGION=${AWS_REGION:?AWS_REGION must be set — run 'headway init'}
       - AWS_DEFAULT_REGION=${AWS_REGION:?AWS_REGION must be set — run 'headway init'}
       - AWS_CONFIG_FILE=/home/nonroot/.aws/config
       - AWS_SHARED_CREDENTIALS_FILE=/home/nonroot/.aws/credentials
+      # Point $HOME at the mounted .aws so the SDK's SSO token cache
+      # (~/.aws/sso/cache) resolves to the bind mount regardless of the image's
+      # default user.
+      - HOME=/home/nonroot
       - HEADROOM_PROXY_AWS_PROFILE=${BEDROCK_AWS_PROFILE:?BEDROCK_AWS_PROFILE must be set — run 'headway init'}
       - HEADROOM_PROXY_BEDROCK_REGION=${AWS_REGION:?AWS_REGION must be set — run 'headway init'}
+      - HEADROOM_TELEMETRY=off
+      # Compression tuning (live-zone). Mirror prior headway agent-friendly knobs.
+      # NOTE: --compression is the master switch; --compression-mode selects the
+      # live-zone dispatcher. Both are required — the master switch alone leaves
+      # the compressor in byte-faithful passthrough (compression_mode=off).
+      - HEADROOM_PROXY_COMPRESSION=1
+      - HEADROOM_PROXY_COMPRESSION_MODE=live_zone
+      - HEADROOM_PROXY_SAVINGS_PROFILE=${HEADROOM_PROXY_SAVINGS_PROFILE:-agent-90}
+      # Durable savings store backing the unified /stats + /dashboard.
+      - HEADROOM_PROXY_SAVINGS_PATH=/home/nonroot/.headroom/proxy_savings.json
+      # Per-model USD pricing for /stats (models.dev cache synced by `headway up`).
+      - HEADROOM_PRICEBOOK=/home/nonroot/.headroom/models-dev.json
     command:
       - "--listen"
       - "0.0.0.0:8787"
+      # Catch-all upstream for the Copilot / OpenAI lane (compressed, then forwarded).
       - "--upstream"
-      - "https://bedrock-runtime.${AWS_REGION:?AWS_REGION must be set — run 'headway init'}.amazonaws.com"
-      - "--aws-profile"
-      - "${BEDROCK_AWS_PROFILE:?BEDROCK_AWS_PROFILE must be set — run 'headway init'}"
+      - "http://litellm:4000"
+      # Native Bedrock InvokeModel/Converse routes (SigV4 re-signing to AWS).
+      - "--enable-bedrock-native"
+      - "true"
       - "--bedrock-region"
       - "${AWS_REGION:?AWS_REGION must be set — run 'headway init'}"
+      - "--aws-profile"
+      - "${BEDROCK_AWS_PROFILE:?BEDROCK_AWS_PROFILE must be set — run 'headway init'}"
+      # Compress LLM-shaped requests on the catch-all (Anthropic/OpenAI) lane.
+      - "--compression"
+      # Select the live-zone compressor (off => byte-faithful passthrough).
+      - "--compression-mode"
+      - "live_zone"
+      # Persist the unified savings aggregate across restarts.
+      - "--savings-path"
+      - "/home/nonroot/.headroom/proxy_savings.json"
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8787/healthz"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8787/healthz', timeout=5).read()"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 20s
     volumes:
       - ./.data/headroom:/home/nonroot/.headroom
       - ${HOME}/.aws:/home/nonroot/.aws
+    depends_on:
+      litellm:
+        # service_started (not _healthy): LiteLLM may sit unhealthy during
+        # Copilot device auth; the Bedrock lane must not be blocked on it.
+        condition: service_started
+        # LiteLLM is optional (profile). `required: false` lets the proxy run
+        # Bedrock-only when LiteLLM isn't started, and wait for it when it is.
+        required: false

@@ -40,8 +40,9 @@ LITELLM_ADMIN_URL="http://127.0.0.1:4001"
 load_env() {
   # Unset all headway-managed vars so they can only come from .env, never
   # silently inherited from the outer shell environment.
-  unset AWS_PROFILE AWS_REGION BEDROCK_AWS_PROFILE BEDROCK_DISCOVERY_AWS_PROFILE \
-    HEADROOM_IMAGE HEADROOM_COMPRESS_USER_MESSAGES HEADROOM_MIN_TOKENS \
+  unset AWS_PROFILE AWS_REGION BEDROCK_AWS_PROFILE \
+    HEADROOM_IMAGE HEADROOM_PROXY_SAVINGS_PROFILE \
+    HEADROOM_COMPRESS_USER_MESSAGES HEADROOM_MIN_TOKENS \
     HEADROOM_PROTECT_RECENT HEADWAY_BEDROCK_AUTO_CACHE_CONTROL \
     HEADWAY_BEDROCK_DEBUG_COMPRESS
   if [[ -f "$ENV_FILE" ]]; then
@@ -101,7 +102,6 @@ iter_env_template_pairs() {
   # Fallback defaults if template is missing.
   printf '%s\n' "AWS_PROFILE=$DEFAULT_AWS_PROFILE"
   printf '%s\n' "BEDROCK_AWS_PROFILE=$DEFAULT_AWS_PROFILE"
-  printf '%s\n' "BEDROCK_DISCOVERY_AWS_PROFILE=$DEFAULT_AWS_PROFILE"
   printf '%s\n' "AWS_REGION=$DEFAULT_AWS_REGION"
   printf '%s\n' "HEADROOM_IMAGE=$DEFAULT_HEADROOM_IMAGE"
 }
@@ -158,14 +158,11 @@ prompt_label_for_env_key() {
     BEDROCK_AWS_PROFILE)
       echo "Bedrock AWS profile"
       ;;
-    BEDROCK_DISCOVERY_AWS_PROFILE)
-      echo "Bedrock discovery profile"
-      ;;
     AWS_REGION)
       echo "AWS region"
       ;;
     HEADROOM_IMAGE)
-      echo "Headroom image (Python proxy + native bedrock binary)"
+      echo "Headroom image (native headroom-proxy binary fronts every lane)"
       ;;
     HEADROOM_COMPRESS_USER_MESSAGES)
       echo "Compress user messages (1=on, 0=off) — reduces tokens sent, default is fine"
@@ -201,9 +198,6 @@ ensure_env_defaults() {
     set_env_key "AWS_PROFILE" "$aws_profile_override"
     if [[ -n "$(get_env_key "BEDROCK_AWS_PROFILE")" ]]; then
       set_env_key "BEDROCK_AWS_PROFILE" "$aws_profile_override"
-    fi
-    if [[ -n "$(get_env_key "BEDROCK_DISCOVERY_AWS_PROFILE")" ]]; then
-      set_env_key "BEDROCK_DISCOVERY_AWS_PROFILE" "$aws_profile_override"
     fi
   fi
 }
@@ -284,7 +278,7 @@ run_init_questionnaire_if_needed() {
 
     local default_value
     default_value="$(env_template_default_for_key "$key" || true)"
-    if [[ "$key" == "BEDROCK_AWS_PROFILE" || "$key" == "BEDROCK_DISCOVERY_AWS_PROFILE" ]]; then
+    if [[ "$key" == "BEDROCK_AWS_PROFILE" ]]; then
       if [[ -n "$aws_profile" ]]; then
         default_value="$aws_profile"
       fi
@@ -345,13 +339,13 @@ ensure_aws_session() {
 
 compose_pull() {
   docker compose -f "$COMPOSE_FILE" pull litellm
-  # headroom and headroom-bedrock share one image (HEADROOM_IMAGE). Only pull
+  # The single Rust proxy runs from HEADROOM_IMAGE. Only pull
   # from a registry — a locally-built override has no remote to fetch.
   local headroom_image
   headroom_image=$(docker compose -f "$COMPOSE_FILE" config --format json 2>/dev/null |
     python3 "$PY_HELPER" compose-image headroom 2>/dev/null || true)
   if [[ -n "$headroom_image" && "$headroom_image" == *"/"* ]]; then
-    docker compose -f "$COMPOSE_FILE" pull headroom headroom-bedrock
+    docker compose -f "$COMPOSE_FILE" pull headroom
   else
     echo "Skipping pull for local headroom image: ${headroom_image:-<unset>}"
   fi
@@ -391,11 +385,8 @@ cleanup_claude_config() {
 }
 
 generate_config() {
-  local aws_profile="$1"
-  local discovery_profile="$2"
+  # Copilot-only LiteLLM config; Bedrock is native in headroom-proxy.
   bash "$ROOT_DIR/scripts/cli/generate-litellm-config.sh" \
-    --aws-profile "$aws_profile" \
-    --bedrock-discovery-aws-profile "$discovery_profile" \
     --output "$ROOT_DIR/litellm_config.yaml"
 }
 
@@ -468,9 +459,6 @@ wait_for_copilot_api_key() {
 # restart litellm so it can start a fresh device-auth flow, and hand off to
 # wait_for_copilot_auth so the user sees the device code and completes auth.
 ensure_copilot_healthy() {
-  local aws_profile_name="$1"
-  local discovery_profile="$2"
-
   # Give litellm a moment to finish loading its config.
   local i
   for ((i = 0; i < 10; i++)); do
@@ -501,9 +489,9 @@ except Exception:
     wait_for_copilot_api_key
     docker compose -f "$COMPOSE_FILE" restart headroom 2>/dev/null || true
     echo "Refreshing model config to include Copilot models..."
-    generate_config "$aws_profile_name" "$discovery_profile"
+    generate_config
     docker compose -f "$COMPOSE_FILE" restart litellm 2>/dev/null || true
-    wait_for_http "$GATEWAY_URL/livez" 30 2 >/dev/null ||
+    wait_for_http "$GATEWAY_URL/healthz" 30 2 >/dev/null ||
       echo "WARNING: gateway did not become healthy after Copilot re-auth"
   else
     # No "expired" log — possibly no Copilot config (init ran before auth).
@@ -738,7 +726,6 @@ cmd_init() {
 
   local aws_profile_name="$AWS_PROFILE"
   local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
-  local discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-$bedrock_profile}"
   local aws_region="$AWS_REGION"
 
   echo
@@ -746,7 +733,6 @@ cmd_init() {
   echo
   ensure_aws_session "$aws_profile_name" "$aws_region"
   ensure_aws_session "$bedrock_profile" "$aws_region"
-  ensure_aws_session "$discovery_profile" "$aws_region"
 
   echo
   echo "--- Step 3/3: Generate gateway configuration ---"
@@ -756,10 +742,10 @@ cmd_init() {
   setup_claude_config "$bedrock_profile" "$aws_region"
 
   if [[ "$skip_config" != "true" ]]; then
-    echo "Discovering Bedrock models and generating gateway config..."
-    echo "(Copilot models will be added automatically when you run 'headway up')"
+    echo "Generating Copilot gateway config (Bedrock is native in headroom-proxy)..."
+    echo "(Copilot models are auto-discovered after you authenticate via 'headway up')"
     echo
-    generate_config "$aws_profile_name" "$discovery_profile"
+    generate_config
   fi
 
   setup_shell_completion
@@ -768,7 +754,6 @@ cmd_init() {
   echo "init complete"
   echo "- AWS_PROFILE: $aws_profile_name"
   echo "- BEDROCK_AWS_PROFILE: $bedrock_profile"
-  echo "- BEDROCK_DISCOVERY_AWS_PROFILE: $discovery_profile"
   echo "- AWS_REGION: $aws_region"
   echo
   echo "Next: run 'headway up' to start the gateway and authenticate Copilot."
@@ -806,12 +791,10 @@ cmd_up() {
 
   local aws_profile_name="$AWS_PROFILE"
   local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
-  local discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-$bedrock_profile}"
   local aws_region="$AWS_REGION"
 
   ensure_aws_session "$aws_profile_name" "$aws_region"
   ensure_aws_session "$bedrock_profile" "$aws_region"
-  ensure_aws_session "$discovery_profile" "$aws_region"
 
   sync_pricing
 
@@ -833,27 +816,27 @@ cmd_up() {
     echo
     echo "--- Refreshing model config with Copilot models ---"
     echo
-    generate_config "$aws_profile_name" "$discovery_profile"
+    generate_config
     docker compose -f "$COMPOSE_FILE" restart litellm 2>/dev/null || true
   fi
 
   echo
   echo "--- Waiting for gateway to become healthy ---"
   echo
-  if ! wait_for_http "$GATEWAY_URL/livez" 30 2 >/dev/null; then
-    echo "ERROR: gateway did not become healthy at $GATEWAY_URL/livez"
+  if ! wait_for_http "$GATEWAY_URL/healthz" 30 2 >/dev/null; then
+    echo "ERROR: gateway did not become healthy at $GATEWAY_URL/healthz"
     echo "       Check logs: docker logs litellm-gateway"
     exit 1
   fi
-  if ! wait_for_http "$BEDROCK_URL/livez" 30 2 >/dev/null; then
-    echo "ERROR: bedrock lane did not become healthy at $BEDROCK_URL/livez"
+  if ! wait_for_http "$BEDROCK_URL/healthz" 30 2 >/dev/null; then
+    echo "ERROR: bedrock lane did not become healthy at $BEDROCK_URL/healthz"
     exit 1
   fi
 
   # Token exists but may have expired (e.g. reinstall with old token file).
   # Detects expiry from litellm logs and auto-triggers re-auth if needed.
   if ! copilot_auth_pending; then
-    ensure_copilot_healthy "$aws_profile_name" "$discovery_profile" || exit 1
+    ensure_copilot_healthy || exit 1
   fi
 
   echo
@@ -871,13 +854,11 @@ cmd_update() {
 
   local aws_profile_name="$AWS_PROFILE"
   local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
-  local discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-$bedrock_profile}"
   local aws_region="$AWS_REGION"
 
   ensure_aws_session "$aws_profile_name" "$aws_region"
   ensure_aws_session "$bedrock_profile" "$aws_region"
-  ensure_aws_session "$discovery_profile" "$aws_region"
-  generate_config "$aws_profile_name" "$discovery_profile"
+  generate_config
 
   sync_pricing
   compose_pull
@@ -887,21 +868,21 @@ cmd_update() {
     wait_for_copilot_auth 600 || exit 1
     wait_for_copilot_api_key
     docker compose -f "$COMPOSE_FILE" restart headroom 2>/dev/null || true
-    generate_config "$aws_profile_name" "$discovery_profile"
+    generate_config
     docker compose -f "$COMPOSE_FILE" restart litellm 2>/dev/null || true
   fi
 
-  if ! wait_for_http "$GATEWAY_URL/livez" 30 2 >/dev/null; then
+  if ! wait_for_http "$GATEWAY_URL/healthz" 30 2 >/dev/null; then
     echo "ERROR: gateway failed health check after update"
     exit 1
   fi
-  if ! wait_for_http "$BEDROCK_URL/livez" 30 2 >/dev/null; then
+  if ! wait_for_http "$BEDROCK_URL/healthz" 30 2 >/dev/null; then
     echo "ERROR: bedrock lane failed health check after update"
     exit 1
   fi
 
   if ! copilot_auth_pending; then
-    ensure_copilot_healthy "$aws_profile_name" "$discovery_profile" || exit 1
+    ensure_copilot_healthy || exit 1
   fi
 
   echo "update complete"
@@ -917,12 +898,10 @@ cmd_restart() {
 
   local aws_profile_name="$AWS_PROFILE"
   local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
-  local discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-$bedrock_profile}"
   local aws_region="$AWS_REGION"
 
   ensure_aws_session "$aws_profile_name" "$aws_region"
   ensure_aws_session "$bedrock_profile" "$aws_region"
-  ensure_aws_session "$discovery_profile" "$aws_region"
 
   docker compose -f "$COMPOSE_FILE" down
   docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
@@ -930,22 +909,22 @@ cmd_restart() {
   if copilot_auth_pending; then
     wait_for_copilot_auth 600 || exit 1
     wait_for_copilot_api_key
-    generate_config "$aws_profile_name" "$discovery_profile"
+    generate_config
     docker compose -f "$COMPOSE_FILE" restart litellm 2>/dev/null || true
     docker compose -f "$COMPOSE_FILE" restart headroom 2>/dev/null || true
   fi
 
-  if ! wait_for_http "$GATEWAY_URL/livez" 30 2 >/dev/null; then
-    echo "ERROR: gateway did not become healthy at $GATEWAY_URL/livez"
+  if ! wait_for_http "$GATEWAY_URL/healthz" 30 2 >/dev/null; then
+    echo "ERROR: gateway did not become healthy at $GATEWAY_URL/healthz"
     exit 1
   fi
-  if ! wait_for_http "$BEDROCK_URL/livez" 30 2 >/dev/null; then
-    echo "ERROR: bedrock lane did not become healthy at $BEDROCK_URL/livez"
+  if ! wait_for_http "$BEDROCK_URL/healthz" 30 2 >/dev/null; then
+    echo "ERROR: bedrock lane did not become healthy at $BEDROCK_URL/healthz"
     exit 1
   fi
 
   if ! copilot_auth_pending; then
-    ensure_copilot_healthy "$aws_profile_name" "$discovery_profile" || exit 1
+    ensure_copilot_healthy || exit 1
   fi
 
   echo "restarted"
@@ -968,12 +947,10 @@ cmd_auth() {
 
   local aws_profile_name="$AWS_PROFILE"
   local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
-  local discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-$bedrock_profile}"
   local aws_region="$AWS_REGION"
 
   ensure_aws_session "$aws_profile_name" "$aws_region"
   ensure_aws_session "$bedrock_profile" "$aws_region"
-  ensure_aws_session "$discovery_profile" "$aws_region"
 
   # If litellm is already running and auth is in progress, don't kill it —
   # restarting mid-flow loses the device session and forces a new code.
@@ -999,16 +976,16 @@ cmd_auth() {
 
   # Wait for api-key.json then regenerate config so named copilot-* models load.
   wait_for_copilot_api_key
-  generate_config "$aws_profile_name" "$discovery_profile"
+  generate_config
   docker compose -f "$COMPOSE_FILE" restart litellm 2>/dev/null || true
 
   # Token is now present — bring headroom up (or restart it) cleanly.
   docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
 
   # Also refresh bedrock lane.
-  docker compose -f "$COMPOSE_FILE" up -d headroom-bedrock 2>/dev/null || true
+  docker compose -f "$COMPOSE_FILE" up -d headroom 2>/dev/null || true
 
-  if ! wait_for_http "$GATEWAY_URL/livez" 30 2 >/dev/null; then
+  if ! wait_for_http "$GATEWAY_URL/healthz" 30 2 >/dev/null; then
     echo "ERROR: gateway failed to become healthy after auth"
     echo "       Check logs: docker logs litellm-gateway"
     exit 1
@@ -1030,13 +1007,13 @@ cmd_doctor() {
   echo
 
   echo "[containers]"
-  docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep -E 'headroom-gateway|litellm-gateway|headroom-bedrock-gateway' || true
+  docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep -E 'headroom-gateway|litellm-gateway' || true
   echo
 
   echo "[health]"
   local live bedrock
-  live=$(curl -sf --max-time 5 "$GATEWAY_URL/livez" 2>/dev/null || true)
-  bedrock=$(curl -sf --max-time 5 "$BEDROCK_URL/livez" 2>/dev/null || true)
+  live=$(curl -sf --max-time 5 "$GATEWAY_URL/healthz" 2>/dev/null || true)
+  bedrock=$(curl -sf --max-time 5 "$BEDROCK_URL/healthz" 2>/dev/null || true)
   if [[ -n "$live" ]]; then
     echo "copilot lane healthy: yes"
   else
@@ -1105,8 +1082,9 @@ cmd_doctor() {
 }
 
 cmd_stats() {
-  local raw_combined raw_stats raw_history
-  raw_combined=$(python3 "$PY_HELPER" combined-stats 2>/dev/null || true)
+  # The single Rust proxy serves the unified /stats across every backend, so we
+  # fetch it directly — no per-lane merge needed.
+  local raw_stats raw_history
   raw_stats=$(curl -sS --max-time 8 "$GATEWAY_URL/stats" 2>/dev/null || true)
   raw_history=$(curl -sS --max-time 8 "$GATEWAY_URL/stats-history" 2>/dev/null || true)
 
@@ -1115,7 +1093,7 @@ cmd_stats() {
     exit 1
   fi
 
-  python3 "$PY_HELPER" stats-report "$raw_stats" "$raw_history" "$raw_combined"
+  python3 "$PY_HELPER" stats-report "$raw_stats" "$raw_history"
 }
 
 cmd_config() {
@@ -1128,45 +1106,22 @@ cmd_config() {
   shift
   case "$sub" in
     regen)
-      require_cmd aws
+      # Copilot-only LiteLLM config; Bedrock is native in headroom-proxy, so no
+      # AWS / Bedrock discovery is needed here.
       require_cmd python3
       load_env
-      require_env
       sync_headroom_tuning_env
-      local aws_profile_name="$AWS_PROFILE"
-      local discovery_profile=""
-      local region="$AWS_REGION"
 
       while [[ $# -gt 0 ]]; do
         case "$1" in
-          --aws-profile)
-            if [[ $# -lt 2 || "$2" == --* ]]; then
-              echo "ERROR: --aws-profile requires value"
-              exit 1
-            fi
-            aws_profile_name="$2"
-            shift 2
-            ;;
-          --bedrock-discovery-aws-profile | --bedrock-discovery-profile)
-            if [[ $# -lt 2 || "$2" == --* ]]; then
-              echo "ERROR: --bedrock-discovery-aws-profile requires value"
-              exit 1
-            fi
-            discovery_profile="$2"
-            shift 2
-            ;;
           *)
             echo "Unknown config regen arg: $1"
             exit 1
             ;;
         esac
       done
-      if [[ -z "$discovery_profile" ]]; then
-        discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-${BEDROCK_AWS_PROFILE:-$aws_profile_name}}"
-      fi
 
-      ensure_aws_session "$discovery_profile" "$region"
-      generate_config "$aws_profile_name" "$discovery_profile"
+      generate_config
       ;;
     setup)
       local target="all"
@@ -1206,7 +1161,6 @@ cmd_config() {
       fi
       echo "AWS_PROFILE=${AWS_PROFILE:-<unset>}"
       echo "BEDROCK_AWS_PROFILE=${BEDROCK_AWS_PROFILE:-<unset>}"
-      echo "BEDROCK_DISCOVERY_AWS_PROFILE=${BEDROCK_DISCOVERY_AWS_PROFILE:-<unset>}"
       echo "AWS_REGION=${AWS_REGION:-<unset>}"
       echo "HEADROOM_IMAGE=${HEADROOM_IMAGE:-<unset>}"
       echo "HEADROOM_COMPRESS_USER_MESSAGES=${HEADROOM_COMPRESS_USER_MESSAGES:-1}"
@@ -1253,7 +1207,7 @@ cmd_reset() {
   require_docker
 
   docker compose -f "$COMPOSE_FILE" down --remove-orphans 2>/dev/null || true
-  docker rm -f headroom-gateway litellm-gateway headroom-bedrock-gateway 2>/dev/null || true
+  docker rm -f headroom-gateway litellm-gateway 2>/dev/null || true
 
   load_env
   require_env
@@ -1261,13 +1215,11 @@ cmd_reset() {
 
   local aws_profile_name="$AWS_PROFILE"
   local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
-  local discovery_profile="${BEDROCK_DISCOVERY_AWS_PROFILE:-$bedrock_profile}"
   local aws_region="$AWS_REGION"
 
   ensure_aws_session "$aws_profile_name" "$aws_region"
   ensure_aws_session "$bedrock_profile" "$aws_region"
-  ensure_aws_session "$discovery_profile" "$aws_region"
-  generate_config "$aws_profile_name" "$discovery_profile"
+  generate_config
 
   sync_pricing
   compose_pull
@@ -1277,21 +1229,21 @@ cmd_reset() {
     wait_for_copilot_auth 600 || exit 1
     wait_for_copilot_api_key
     docker compose -f "$COMPOSE_FILE" restart headroom 2>/dev/null || true
-    generate_config "$aws_profile_name" "$discovery_profile"
+    generate_config
     docker compose -f "$COMPOSE_FILE" restart litellm 2>/dev/null || true
   fi
 
-  if ! wait_for_http "$GATEWAY_URL/livez" 30 2 >/dev/null; then
-    echo "ERROR: gateway did not become healthy at $GATEWAY_URL/livez"
+  if ! wait_for_http "$GATEWAY_URL/healthz" 30 2 >/dev/null; then
+    echo "ERROR: gateway did not become healthy at $GATEWAY_URL/healthz"
     exit 1
   fi
-  if ! wait_for_http "$BEDROCK_URL/livez" 30 2 >/dev/null; then
-    echo "ERROR: bedrock lane did not become healthy at $BEDROCK_URL/livez"
+  if ! wait_for_http "$BEDROCK_URL/healthz" 30 2 >/dev/null; then
+    echo "ERROR: bedrock lane did not become healthy at $BEDROCK_URL/healthz"
     exit 1
   fi
 
   if ! copilot_auth_pending; then
-    ensure_copilot_healthy "$aws_profile_name" "$discovery_profile" || exit 1
+    ensure_copilot_healthy || exit 1
   fi
 
   echo "reset complete — gateway is back up"
@@ -1415,7 +1367,7 @@ cmd_uninstall() {
   # Stop services and wipe all state
   if docker info >/dev/null 2>&1; then
     docker compose -f "$COMPOSE_FILE" down --remove-orphans 2>/dev/null || true
-    docker rm -f headroom-gateway litellm-gateway headroom-bedrock-gateway 2>/dev/null || true
+    docker rm -f headroom-gateway litellm-gateway 2>/dev/null || true
     docker image rm "${HEADROOM_IMAGE:-$DEFAULT_HEADROOM_IMAGE}" 2>/dev/null || true
     docker image rm ghcr.io/berriai/litellm:main-stable 2>/dev/null || true
     echo "stopped containers and removed images"
@@ -1464,35 +1416,21 @@ cmd_uninstall() {
 }
 
 cmd_test() {
-  require_cmd aws
   require_cmd python3
   require_docker
-
+  # Load .env (and clear inherited shell vars) so the smoke test's
+  # `docker compose up` interpolates the repo config deterministically rather
+  # than whatever AWS_* happen to be in the parent shell. require_env ensures
+  # the compose `${VAR:?}` guards won't abort mid-bringup.
   load_env
   require_env
-
-  local aws_profile_name="$AWS_PROFILE"
-  local bedrock_profile="${BEDROCK_AWS_PROFILE:-$aws_profile_name}"
-  local aws_region="$AWS_REGION"
-
-  if ! AWS_REGION="$aws_region" AWS_DEFAULT_REGION="$aws_region" \
-    aws sts get-caller-identity --profile "$bedrock_profile" >/dev/null 2>&1; then
-    echo "ERROR: AWS credentials expired for profile '$bedrock_profile'."
-    echo "       Fix: headway auth"
-    exit 1
-  fi
-
-  check_copilot_auth_hint || true
-
-  exec bash "$ROOT_DIR/scripts/cli/test.sh" "$@"
+  # Single-proxy smoke test: /healthz, unified /stats, /dashboard, and the
+  # Bedrock recorder — all served natively by headroom-proxy.
+  exec bash "$ROOT_DIR/scripts/cli/test-rust-stats.sh" "$@"
 }
 
 cmd_secret_scan() {
   exec bash "$ROOT_DIR/scripts/cli/secret-scan.sh" "$@"
-}
-
-cmd_e2e() {
-  exec bash "$ROOT_DIR/scripts/cli/headway-e2e-test.sh" "$@"
 }
 
 setup_shell_completion() {
@@ -1583,7 +1521,7 @@ ZSHEOF
       cat <<'FISHEOF'
 # headway fish completion
 
-set -l _hw_cmds up down update restart reset auth init config doctor stats test e2e cleanup uninstall secret-scan completion help
+set -l _hw_cmds up down update restart reset auth init config doctor stats test cleanup uninstall secret-scan completion help
 
 complete -c headway -f -n '__fish_use_subcommand' -a "$_hw_cmds"
 
@@ -1596,8 +1534,6 @@ complete -c headway -n '__fish_seen_subcommand_from init' -l skip-config -d 'Ski
 
 # config subcommands
 complete -c headway -n '__fish_seen_subcommand_from config' -a 'show regen setup'
-complete -c headway -n '__fish_seen_subcommand_from config; and __fish_seen_subcommand_from regen' -l aws-profile -d 'AWS profile name'
-complete -c headway -n '__fish_seen_subcommand_from config; and __fish_seen_subcommand_from regen' -l bedrock-discovery-aws-profile -d 'Bedrock discovery profile'
 complete -c headway -n '__fish_seen_subcommand_from config; and __fish_seen_subcommand_from setup' -a 'kilo claude all'
 
 # cleanup
@@ -1651,8 +1587,8 @@ SETUP & CONFIGURATION
   config show
       Show active environment settings
 
-  config regen [--aws-profile <name>] [--bedrock-discovery-aws-profile <name>]
-      Regenerate litellm_config.yaml
+  config regen
+      Regenerate the Copilot-only litellm_config.yaml (Bedrock is native)
 
   config setup [kilo|claude|all]
       Write client configs (default: all)
@@ -1665,10 +1601,8 @@ DIAGNOSTICS
       Usage and cost savings report
 
   test [...]
-      Run the smoke test suite (requires live gateway)
-
-  e2e [--branch <branch>] [--aws-profile <profile>] [--region <region>]
-      Full end-to-end install test: fresh clone → init → up → smoke tests → down → cleanup
+      Single-proxy smoke test: /healthz, unified /stats, /dashboard, and the
+      Bedrock recorder (requires the headroom service running — 'headway up')
 
 MAINTENANCE
   cleanup <data|images|kilo|claude|all> [--yes]
@@ -1742,9 +1676,6 @@ main() {
       ;;
     secret-scan)
       cmd_secret_scan "$@"
-      ;;
-    e2e)
-      cmd_e2e "$@"
       ;;
     cleanup)
       cmd_cleanup "$@"

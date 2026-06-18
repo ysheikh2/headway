@@ -4,7 +4,7 @@
 _headway_commands=(
   up down update restart reset auth
   init config
-  doctor stats test e2e
+  doctor stats test
   cleanup
   uninstall secret-scan completion help
 )
@@ -12,7 +12,6 @@ _headway_commands=(
 _headway_up_flags=(--aws-profile)
 _headway_init_flags=(--aws-profile --skip-config)
 _headway_config_subcommands=(show regen setup)
-_headway_config_regen_flags=(--aws-profile --bedrock-discovery-aws-profile)
 _headway_config_setup_targets=(kilo claude all)
 _headway_cleanup_targets=(data images kilo claude all)
 
@@ -53,11 +52,6 @@ _headway_bash_completion() {
       local sub="${words[2]:-}"
       if [[ $cword -eq 2 ]]; then
         COMPREPLY=($(compgen -W "${_headway_config_subcommands[*]}" -- "$cur"))
-      elif [[ "$sub" == "regen" ]]; then
-        case "$prev" in
-          --aws-profile | --bedrock-discovery-aws-profile) COMPREPLY=() ;;
-          *) COMPREPLY=($(compgen -W "${_headway_config_regen_flags[*]}" -- "$cur")) ;;
-        esac
       elif [[ "$sub" == "setup" ]]; then
         COMPREPLY=($(compgen -W "${_headway_config_setup_targets[*]}" -- "$cur"))
       fi

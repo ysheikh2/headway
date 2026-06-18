@@ -12,14 +12,11 @@ Subcommands:
 - claude-check <vscode_settings_path> <aws_profile> <aws_region>
 - compose-image <service_name>  (reads compose JSON on stdin)
 - models-summary                (reads /v1/models JSON on stdin)
-- combined-stats
-- stats-report <raw_stats> <raw_history> <raw_combined>
-- generate-config <tmp_dir> <output_file> [copilot_token_file]
+- stats-report <raw_stats> [raw_history]
+- generate-config <output_file> [copilot_token_file]
 - build-bedrock-compression-payload <outfile>
 - build-copilot-cache-payload <outfile> <model>
 - build-copilot-compression-payload <outfile> <model>
-- select-bedrock-model          (reads /v1/models JSON on stdin)
-- select-bedrock-anthropic-model (reads /v1/models JSON on stdin)
 """
 
 from __future__ import annotations
@@ -34,10 +31,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-COPILOT_STATS_URL = "http://127.0.0.1:4000/stats"
-BEDROCK_STATS_URL = "http://127.0.0.1:4002/stats"
-BEDROCK_METRICS_URL = "http://127.0.0.1:4002/metrics"
-BEDROCK_NATIVE_PATCH_STATS_URL = "http://127.0.0.1:4002/bedrock-native/stats"
+# The single Rust proxy serves the unified /stats; the `headway stats` bash
+# command fetches it directly and passes it to `stats-report`.
 
 
 def _strip_jsonc_comments(text: str) -> str:
@@ -313,200 +308,7 @@ def cmd_models_summary() -> int:
     return 0
 
 
-# ---- combined stats ----
-
-
-def _fetch_json(url: str, timeout: int = 4) -> tuple[dict[str, Any] | None, str | None]:
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8", errors="replace").strip()
-    except urllib.error.URLError as exc:
-        return None, str(exc)
-    except Exception as exc:  # pragma: no cover
-        return None, str(exc)
-
-    if not raw:
-        return None, "empty response"
-
-    try:
-        obj = json.loads(raw)
-    except Exception:
-        return None, f"non-json response: {raw[:120]}"
-
-    if not isinstance(obj, dict):
-        return None, "unexpected json payload"
-    return obj, None
-
-
-def _fetch_text(url: str, timeout: int = 4) -> tuple[str | None, str | None]:
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
-            return resp.read().decode("utf-8", errors="replace"), None
-    except urllib.error.URLError as exc:
-        return None, str(exc)
-    except Exception as exc:  # pragma: no cover
-        return None, str(exc)
-
-
-def _num(d: dict[str, Any], *path: str) -> float:
-    cur: Any = d
-    for p in path:
-        if not isinstance(cur, dict):
-            return 0.0
-        cur = cur.get(p)
-    return float(cur) if isinstance(cur, (int, float)) else 0.0
-
-
-def _int_num(d: dict[str, Any], *path: str) -> int:
-    return int(_num(d, *path))
-
-
-def _parse_metrics(text: str) -> dict[str, int]:
-    out = {"api_requests": 0, "requests_failed": 0}
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        metric_name = line.split("{", 1)[0].split()[0]
-        value_s = line.rsplit(" ", 1)[-1]
-        try:
-            value = int(float(value_s))
-        except Exception:
-            continue
-
-        if metric_name == "bedrock_invoke_count_total":
-            out["api_requests"] += value
-            continue
-
-        if metric_name == "proxy_response_status_count_total":
-            labels = ""
-            if "{" in line and "}" in line:
-                labels = line.split("{", 1)[1].split("}", 1)[0]
-            status = None
-            for label in labels.split(","):
-                if label.startswith("status="):
-                    status = label.split("=", 1)[1].strip().strip('"')
-                    break
-            if status and status.startswith(("4", "5")):
-                out["requests_failed"] += value
-    return out
-
-
-def cmd_combined_stats() -> int:
-    copilot, copilot_err = _fetch_json(COPILOT_STATS_URL)
-    bedrock, bedrock_err = _fetch_json(BEDROCK_STATS_URL)
-    bedrock_patch_stats, _ = _fetch_json(BEDROCK_NATIVE_PATCH_STATS_URL)
-
-    if copilot is None:
-        print(
-            json.dumps(
-                {
-                    "ok": False,
-                    "error": "copilot_stats_unavailable",
-                    "details": copilot_err or "unknown",
-                }
-            )
-        )
-        return 1
-
-    if isinstance(copilot.get("unified"), dict) and isinstance(copilot.get("lanes"), dict):
-        out = {
-            "ok": True,
-            "unified": copilot.get("unified", {}),
-            "lanes": copilot.get("lanes", {}),
-            "raw": {
-                "copilot": copilot,
-                "bedrock_native": (copilot.get("raw_unified_sources", {}) or {}).get(
-                    "bedrock_native"
-                ),
-            },
-        }
-        print(json.dumps(out))
-        return 0
-
-    bedrock_metrics_raw = None
-    if bedrock is None:
-        metrics_text, metrics_err = _fetch_text(BEDROCK_METRICS_URL)
-        if metrics_text is not None:
-            parsed = _parse_metrics(metrics_text)
-            bedrock = {
-                "summary": {"api_requests": parsed["api_requests"]},
-                "tokens": {"saved": 0, "proxy_compression_saved": 0},
-                "requests": {"cached": 0, "failed": parsed["requests_failed"]},
-            }
-            bedrock_metrics_raw = {
-                "source": "prometheus",
-                "endpoint": BEDROCK_METRICS_URL,
-            }
-            bedrock_err = None
-        else:
-            bedrock_err = bedrock_err or metrics_err
-
-    _bp = bedrock_patch_stats or {}
-    _bd = bedrock or {}
-    _bp_tokens = _bp.get("tokens", {}) if isinstance(_bp.get("tokens"), dict) else {}
-    _bp_summary = _bp.get("summary", {}) if isinstance(_bp.get("summary"), dict) else {}
-    _bp_compression = (
-        _bp_summary.get("compression", {})
-        if isinstance(_bp_summary.get("compression"), dict)
-        else {}
-    )
-    lanes = {
-        "copilot": {
-            "available": True,
-            "endpoint": COPILOT_STATS_URL,
-            "api_requests": _int_num(copilot, "summary", "api_requests"),
-            "input_tokens": _int_num(copilot, "tokens", "input"),
-            "output_tokens": _int_num(copilot, "tokens", "output"),
-            "tokens_saved": _int_num(copilot, "tokens", "saved"),
-            "compression_tokens_saved": _int_num(copilot, "tokens", "proxy_compression_saved"),
-            "requests_cached": _int_num(copilot, "requests", "cached"),
-            "requests_failed": _int_num(copilot, "requests", "failed"),
-        },
-        "bedrock_native": {
-            "available": bedrock is not None,
-            "endpoint": BEDROCK_STATS_URL,
-            "error": bedrock_err,
-            "api_requests": _int_num(_bp, "summary", "api_requests")
-            or _int_num(_bd, "summary", "api_requests"),
-            "input_tokens": int(_bp_tokens.get("input") or 0),
-            "output_tokens": int(_bp_tokens.get("output") or 0),
-            "tokens_saved": _int_num(_bp, "tokens", "saved") or _int_num(_bd, "tokens", "saved"),
-            "compression_tokens_saved": _int_num(_bp, "tokens", "proxy_compression_saved")
-            or _int_num(_bd, "tokens", "proxy_compression_saved"),
-            "requests_cached": _int_num(_bp, "requests", "cached")
-            or _int_num(_bd, "requests", "cached"),
-            "requests_failed": _int_num(_bp, "requests", "failed")
-            or _int_num(_bd, "requests", "failed"),
-            "compression_pct": float(_bp_compression.get("avg_compression_pct") or 0.0),
-            "compression": _bp_compression,
-            "cache": _bp.get("cache", {}),
-        },
-    }
-
-    unified = {
-        "api_requests": lanes["copilot"]["api_requests"] + lanes["bedrock_native"]["api_requests"],
-        "tokens_saved": lanes["copilot"]["tokens_saved"] + lanes["bedrock_native"]["tokens_saved"],
-        "compression_tokens_saved": lanes["copilot"]["compression_tokens_saved"]
-        + lanes["bedrock_native"]["compression_tokens_saved"],
-        "requests_cached": lanes["copilot"]["requests_cached"]
-        + lanes["bedrock_native"]["requests_cached"],
-        "requests_failed": lanes["copilot"]["requests_failed"]
-        + lanes["bedrock_native"]["requests_failed"],
-    }
-
-    out = {
-        "ok": True,
-        "unified": unified,
-        "lanes": lanes,
-        "raw": {
-            "copilot": copilot,
-            "bedrock_native": bedrock_metrics_raw if bedrock_metrics_raw is not None else bedrock,
-            "bedrock_native_patch": bedrock_patch_stats,
-        },
-    }
-    print(json.dumps(out))
-    return 0
+# ---- stats report ----
 
 
 def _load_json_str(raw: str) -> dict[str, Any]:
@@ -519,297 +321,96 @@ def _load_json_str(raw: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def cmd_stats_report(raw_stats: str, raw_history: str, raw_combined: str) -> int:
-    stats = _load_json_str(raw_stats)
-    history = _load_json_str(raw_history)
-    combined = _load_json_str(raw_combined)
+def cmd_stats_report(raw_stats: str, raw_history: str = "", _raw_combined: str = "") -> int:
+    """Render the unified savings report from the single Rust proxy's `/stats`.
 
-    summary = stats.get("summary", {})
-    tokens = stats.get("tokens", {})
-    requests = stats.get("requests", {})
-    cost = summary.get("cost", {})
+    The Rust proxy fronts every backend in one process, so `/stats` is already
+    unified across providers/models — there is no per-lane merge to do here.
+    """
+    # Fail fast on a non-empty but unparseable /stats payload — a zeroed report
+    # would otherwise mask an upstream fetch failure. An empty string (no data
+    # yet) still renders a zeroed report.
+    stats: dict[str, Any] = {}
+    if raw_stats.strip():
+        try:
+            parsed = json.loads(raw_stats)
+        except json.JSONDecodeError as exc:
+            print(f"ERROR: /stats payload is not valid JSON: {exc}", file=sys.stderr)
+            return 1
+        if not isinstance(parsed, dict):
+            print("ERROR: /stats payload is not a JSON object", file=sys.stderr)
+            return 1
+        stats = parsed
+    _ = _load_json_str(raw_history)  # reserved for future trend output
 
-    def _fmt_pct(numerator: float, denominator: float) -> str:
-        if denominator <= 0:
-            return "n/a"
-        return f"{(100.0 * numerator / denominator):.2f}%"
+    requests = stats.get("requests", {}) or {}
+    tokens = stats.get("tokens", {}) or {}
+    cost = stats.get("cost", {}) or {}
+    summary_cost = (stats.get("summary", {}) or {}).get("cost", {}) or {}
+    persistent = stats.get("persistent_savings", {}) or {}
+    lifetime = persistent.get("lifetime", {}) or {}
+    session = persistent.get("display_session", {}) or {}
 
-    def _fmt_float_pct(value: Any) -> str:
-        if isinstance(value, (int, float)):
-            return f"{float(value):.2f}%"
-        return "n/a"
+    def _i(d: dict[str, Any], k: str) -> int:
+        v = d.get(k, 0)
+        return int(v) if isinstance(v, (int, float)) else 0
 
-    def _fmt_usd(value: Any) -> str:
-        if isinstance(value, (int, float)):
-            return f"${float(value):.6f}"
-        return "n/a"
+    def _f(d: dict[str, Any], k: str) -> float:
+        v = d.get(k, 0.0)
+        return float(v) if isinstance(v, (int, float)) else 0.0
 
-    def _safe_int(value: Any) -> int:
-        return int(value) if isinstance(value, (int, float)) else 0
+    def _usd(v: Any) -> str:
+        return f"${float(v):.6f}" if isinstance(v, (int, float)) else "n/a"
 
-    print("=== Headroom Savings Report ===")
-    if isinstance(combined, dict) and combined.get("ok"):
-        unified = combined.get("unified", {})
-        print(f"Unified API requests: {unified.get('api_requests', 0)}")
-        print(f"Unified tokens saved: {unified.get('tokens_saved', 0)}")
+    print("=== Headroom Savings Report (unified) ===")
+    print(f"Requests: {_i(requests, 'total')} (failed: {_i(requests, 'failed')})")
 
-        lanes = combined.get("lanes", {}) if isinstance(combined.get("lanes"), dict) else {}
-        copilot_lane = lanes.get("copilot", {}) if isinstance(lanes.get("copilot"), dict) else {}
-        bedrock_lane = (
-            lanes.get("bedrock_native", {}) if isinstance(lanes.get("bedrock_native"), dict) else {}
+    by_provider = requests.get("by_provider", {}) or {}
+    if isinstance(by_provider, dict) and by_provider:
+        parts = ", ".join(
+            f"{k}={v}" for k, v in sorted(by_provider.items(), key=lambda kv: -int(kv[1]))
         )
-        print(
-            "Unified lanes: "
-            f"copilot(in={copilot_lane.get('input_tokens', 0)}, out={copilot_lane.get('output_tokens', 0)}, "
-            f"saved={copilot_lane.get('tokens_saved', 0)}, cached={copilot_lane.get('requests_cached', 0)}) "
-            f"bedrock(in={bedrock_lane.get('input_tokens', 0)}, out={bedrock_lane.get('output_tokens', 0)}, "
-            f"saved={bedrock_lane.get('tokens_saved', 0)}, cached={bedrock_lane.get('requests_cached', 0)}, "
-            f"compression={bedrock_lane.get('compression_pct', 0.0):.1f}%)"
-        )
-        bedrock_shim = (
-            bedrock_lane.get("shim_stats")
-            if isinstance(bedrock_lane.get("shim_stats"), dict)
-            else {}
-        )
-        if bedrock_shim:
-            print(
-                "Bedrock native shim: "
-                f"api_requests={bedrock_shim.get('api_requests', 0)}, "
-                f"compressed={bedrock_shim.get('compressed_requests', 0)}, "
-                f"tokens_before={bedrock_shim.get('tokens_before', 0)}, "
-                f"tokens_after={bedrock_shim.get('tokens_after', 0)}, "
-                f"tokens_saved={bedrock_shim.get('tokens_saved', 0)}"
-            )
-        bedrock_compression = (
-            bedrock_lane.get("compression", {})
-            if isinstance(bedrock_lane.get("compression"), dict)
-            else {}
-        )
-        if bedrock_compression:
-            print(
-                "Bedrock native compression: "
-                f"requests_compressed={bedrock_compression.get('requests_compressed', 0)}, "
-                f"avg={_fmt_float_pct(bedrock_compression.get('avg_compression_pct'))}, "
-                f"best={_fmt_float_pct(bedrock_compression.get('best_compression_pct'))}, "
-                f"cache_markers_applied={bedrock_compression.get('cache_markers_applied', 0)}"
-            )
-        if (
-            bedrock_lane.get("available") is True
-            and _safe_int(bedrock_lane.get("api_requests")) > 0
-            and _safe_int(bedrock_lane.get("tokens_saved")) == 0
-        ):
-            print(
-                "Bedrock lane note: requests are reaching :4002, but no net compression "
-                "savings were recorded for this traffic window."
-            )
+        print(f"By backend: {parts}")
 
-    print(f"API requests: {summary.get('api_requests', 0)}")
-    print(f"Input tokens: {tokens.get('input', 0)}")
-    print(f"Output tokens: {tokens.get('output', 0)}")
-    print(f"Saved tokens: {tokens.get('saved', 0)}")
-    print(f"Cached requests: {requests.get('cached', 0)}")
     print(
-        f"Cache hit rate: {_fmt_pct(float(_safe_int(requests.get('cached', 0))), float(_safe_int(summary.get('api_requests', 0))))}"
+        f"Tokens: input={_i(tokens, 'input')}, output={_i(tokens, 'output')}, "
+        f"saved={_i(tokens, 'saved')} ({_f(tokens, 'savings_percent'):.2f}%)"
     )
+    total_usd = _f(summary_cost, "total_saved_usd") or _f(cost, "savings_usd")
     print(
-        f"Active token savings: {_fmt_float_pct(tokens.get('savings_percent'))} "
-        f"(proxy-only: {_fmt_float_pct(tokens.get('proxy_savings_percent'))})"
+        f"USD saved: {_usd(total_usd)} "
+        f"(compression {_usd(_f(cost, 'compression_savings_usd'))}, "
+        f"cache {_usd(_f(cost, 'cache_savings_usd'))})"
     )
 
-    compression = (
-        summary.get("compression", {}) if isinstance(summary.get("compression"), dict) else {}
-    )
-    print(
-        "Compression details: "
-        f"requests_compressed={compression.get('requests_compressed', 0)}, "
-        f"avg={_fmt_float_pct(compression.get('avg_compression_pct'))}, "
-        f"best={_fmt_float_pct(compression.get('best_compression_pct'))}, "
-        f"best_detail={compression.get('best_detail', 'n/a')}"
-    )
-
-    print(f"Cost without headroom: {_fmt_usd(cost.get('without_headroom_usd'))}")
-    print(f"Cost with headroom: {_fmt_usd(cost.get('with_headroom_usd'))}")
-    print(f"Total saved USD: {_fmt_usd(cost.get('total_saved_usd'))}")
-
-    breakdown = cost.get("breakdown", {}) if isinstance(cost.get("breakdown"), dict) else {}
-    if breakdown:
-        print(
-            "Cost breakdown: "
-            f"compression={_fmt_usd(breakdown.get('compression_savings_usd'))}, "
-            f"cache={_fmt_usd(breakdown.get('cache_savings_usd'))}"
-        )
-
-    cost_block = stats.get("cost", {}) if isinstance(stats.get("cost"), dict) else {}
-    per_model = (
-        cost_block.get("per_model", {}) if isinstance(cost_block.get("per_model"), dict) else {}
-    )
-    if per_model:
-        print("Top models by token savings:")
-        rows: list[tuple[str, int, float, int, float]] = []
-        for model, model_stats in per_model.items():
-            if not isinstance(model_stats, dict):
-                continue
-            rows.append(
-                (
-                    str(model),
-                    _safe_int(model_stats.get("tokens_saved")),
-                    float(model_stats.get("reduction_pct", 0.0) or 0.0),
-                    _safe_int(model_stats.get("requests")),
-                    float(model_stats.get("tokens_sent", 0.0) or 0.0),
-                )
-            )
-        rows.sort(key=lambda item: item[1], reverse=True)
-        for model, saved_toks, reduction_pct, reqs, sent_toks in rows[:6]:
-            print(
-                f"  - {model}: saved={saved_toks}, reduction={reduction_pct:.2f}%, "
-                f"requests={reqs}, sent={int(sent_toks)}"
-            )
-
-        zero_usd_models = [
-            m
-            for m, ms in per_model.items()
-            if isinstance(ms, dict)
-            and _safe_int(ms.get("tokens_saved")) > 0
-            and float(ms.get("reduction_pct", 0.0) or 0.0) > 0
-            and float(ms.get("tokens_sent", 0.0) or 0.0) > 0
-            and (
-                float(cost.get("total_saved_usd", 0.0) or 0.0) == 0.0
-                or float(cost_block.get("compression_savings_usd", 0.0) or 0.0) == 0.0
-            )
-        ]
-        if zero_usd_models:
-            print(
-                "Note: token savings are present but USD savings are zero. "
-                "This usually means missing/unknown price metadata for one or more models."
-            )
-
-    request_logs = stats.get("request_logs") if isinstance(stats.get("request_logs"), list) else []
-    if request_logs:
-        model_rollup: dict[str, dict[str, float]] = {}
-        for row in request_logs:
-            if not isinstance(row, dict):
-                continue
-            model = str(row.get("model", "unknown"))
-            slot = model_rollup.setdefault(
-                model,
-                {
-                    "requests": 0.0,
-                    "cache_hits": 0.0,
-                    "tokens_saved": 0.0,
-                    "input_original": 0.0,
-                    "input_optimized": 0.0,
-                },
-            )
-            slot["requests"] += 1.0
-            if bool(row.get("cache_hit")):
-                slot["cache_hits"] += 1.0
-            slot["tokens_saved"] += float(row.get("tokens_saved", 0.0) or 0.0)
-            slot["input_original"] += float(row.get("input_tokens_original", 0.0) or 0.0)
-            slot["input_optimized"] += float(row.get("input_tokens_optimized", 0.0) or 0.0)
-
+    per_model = cost.get("per_model", {}) or {}
+    if isinstance(per_model, dict) and per_model:
+        print("Per-model:")
         ranked = sorted(
-            model_rollup.items(),
-            key=lambda kv: (int(kv[1]["requests"]), float(kv[1]["tokens_saved"])),
-            reverse=True,
+            (kv for kv in per_model.items() if isinstance(kv[1], dict)),
+            key=lambda kv: -_i(kv[1], "tokens_saved"),
         )
-        print("Model-level recent behavior (from request logs):")
-        for model, data in ranked[:6]:
-            reqs = int(data["requests"])
-            cache_hits = int(data["cache_hits"])
-            cache_hit_pct = _fmt_pct(float(cache_hits), float(reqs))
-            saved = int(data["tokens_saved"])
-            reduction_pct = _fmt_pct(
-                float(saved),
-                float(data["input_original"]),
-            )
+        for model, m in ranked[:10]:
             print(
-                f"  - {model}: req={reqs}, cache_hit={cache_hits}/{reqs} ({cache_hit_pct}), "
-                f"saved={saved} ({reduction_pct})"
+                f"  {model}: requests={_i(m, 'requests')}, saved={_i(m, 'tokens_saved')}, "
+                f"compression={_usd(_f(m, 'compression_savings_usd'))}, "
+                f"cache={_usd(_f(m, 'cache_savings_usd'))}"
             )
 
-    if isinstance(history, dict) and history.get("display_session"):
-        ds = history.get("display_session", {})
-        print(f"Session requests: {ds.get('requests', 0)}")
-        session_saved = _safe_int(ds.get("tokens_saved", 0))
-        print(f"Session tokens saved: {session_saved}")
-        if isinstance(ds, dict):
-            print(f"Session compression USD: {_fmt_usd(ds.get('compression_savings_usd'))}")
-            # Compute savings percent from combined stats if available (copilot-only history
-            # reports 0% when bedrock lane carries the savings).
-            session_pct: float | None = None
-            if isinstance(combined, dict) and combined.get("ok"):
-                lanes = combined.get("lanes", {}) or {}
-                bedrock_lane = lanes.get("bedrock_native", {}) or {}
-                shim = bedrock_lane.get("shim_stats") or {}
-                # snapshot_stats() returns flat fields: tokens_before, tokens_saved
-                bedrock_before = _safe_int(shim.get("tokens_before") or 0)
-                bedrock_saved = _safe_int(shim.get("tokens_saved") or 0)
-                copilot_in = _safe_int(tokens.get("input", 0))
-                copilot_saved = _safe_int(tokens.get("saved", 0))
-                # tokens_before is input BEFORE compression; savings_pct = saved / before
-                total_before = bedrock_before + copilot_in + copilot_saved
-                total_saved_all = bedrock_saved + copilot_saved
-                if total_before > 0 and total_saved_all > 0:
-                    session_pct = round(100.0 * total_saved_all / total_before, 2)
-            if session_pct is None:
-                raw_pct = ds.get("savings_percent")
-                session_pct = float(raw_pct) if isinstance(raw_pct, (int, float)) else 0.0
-            print(f"Session savings percent: {_fmt_float_pct(session_pct)}")
-
+    print(
+        f"Lifetime: requests={_i(lifetime, 'requests')}, "
+        f"tokens_saved={_i(lifetime, 'tokens_saved')}, "
+        f"compression={_usd(_f(lifetime, 'compression_savings_usd'))}"
+    )
+    print(
+        f"Session:  requests={_i(session, 'requests')}, "
+        f"tokens_saved={_i(session, 'tokens_saved')}, "
+        f"savings={_f(session, 'savings_percent'):.2f}%"
+    )
+    hist_points = stats.get("history_points")
+    if isinstance(hist_points, int):
+        print(f"History points: {hist_points}")
     return 0
-
-
-# ---- litellm config generation ----
-
-
-def _slugify(value: str) -> str:
-    return re.sub(r"-+", "-", re.sub(r"[^a-z0-9]+", "-", value.lower())).strip("-")
-
-
-def _region_from_filename(path: str) -> str:
-    base = os.path.basename(path)
-    parts = base.split("-")
-    return "-".join(parts[1:4]).split(".")[0]
-
-
-def _extract_model_id_from_arn(arn: str) -> str:
-    if "/" in arn:
-        return arn.rsplit("/", 1)[-1]
-    return ""
-
-
-PREFERRED_REGION_ORDER = {
-    "eu-central-1": 0,
-    "eu-west-1": 1,
-    "eu-west-2": 2,
-    "eu-west-3": 3,
-    "eu-north-1": 4,
-    "eu-south-1": 5,
-    "eu-south-2": 6,
-}
-
-
-def _region_rank(region: str) -> int:
-    return PREFERRED_REGION_ORDER.get(region, 99)
-
-
-def _lifecycle_rank(status: str) -> int:
-    s = (status or "").upper()
-    if s == "ACTIVE":
-        return 3
-    if s == "LEGACY":
-        return 2
-    if s == "DEPRECATED":
-        return 1
-    return 0
-
-
-def _pick_better(
-    existing: tuple[str, str, str] | None, candidate: tuple[str, str, str]
-) -> tuple[str, str, str]:
-    if existing is None:
-        return candidate
-    return candidate if _region_rank(candidate[2]) < _region_rank(existing[2]) else existing
 
 
 def _fetch_copilot_models(token_file: str) -> list[str]:
@@ -830,12 +431,16 @@ def _fetch_copilot_models(token_file: str) -> list[str]:
         with open(token_file, encoding="utf-8") as fh:
             key_data = json.load(fh)
 
-        token = key_data.get("token") or key_data.get("api_key")
-        if not token and isinstance(key_data, dict):
-            for value in key_data.values():
-                if isinstance(value, str) and value.strip():
-                    token = value.strip()
-                    break
+        token: str = ""
+        if isinstance(key_data, dict):
+            token = key_data.get("token") or key_data.get("api_key") or ""
+            if not token:
+                for value in key_data.values():
+                    if isinstance(value, str) and value.strip():
+                        token = value.strip()
+                        break
+        elif isinstance(key_data, str):
+            token = key_data.strip()
 
         if not token:
             print(
@@ -886,121 +491,19 @@ def _fetch_copilot_models(token_file: str) -> list[str]:
         return []
 
 
-def cmd_generate_config(tmp_dir: str, output_file: str, copilot_token_file: str) -> int:
-    foundation_status_by_model: dict[str, str] = {}
-    foundation_best_region: dict[str, str] = {}
-    foundation_on_demand: dict[str, bool] = {}
+def cmd_generate_config(output_file: str, copilot_token_file: str) -> int:
+    """Generate a Copilot-only LiteLLM config.
 
-    for name in sorted(os.listdir(tmp_dir)):
-        if not name.startswith("foundation-") or not name.endswith(".json"):
-            continue
-        path = os.path.join(tmp_dir, name)
-        try:
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            continue
-
-        region = _region_from_filename(path)
-        for model in data.get("modelSummaries", []):
-            if not isinstance(model, dict):
-                continue
-            model_id = model.get("modelId")
-            if not model_id:
-                continue
-
-            status = ((model.get("modelLifecycle") or {}).get("status") or "").upper()
-            old_status = foundation_status_by_model.get(model_id, "")
-            if _lifecycle_rank(status) > _lifecycle_rank(old_status):
-                foundation_status_by_model[model_id] = status
-
-            inf_types = {str(x).upper() for x in model.get("inferenceTypesSupported", [])}
-            foundation_on_demand[model_id] = foundation_on_demand.get(model_id, False) or (
-                "ON_DEMAND" in inf_types
-            )
-
-            prior_region = foundation_best_region.get(model_id)
-            if prior_region is None or _region_rank(region) < _region_rank(prior_region):
-                foundation_best_region[model_id] = region
-
-    selected: dict[str, tuple[str, str, str]] = {}
-    covered_model_ids: set[str] = set()
-
-    for name in sorted(os.listdir(tmp_dir)):
-        if not name.startswith("inference-") or not name.endswith(".json"):
-            continue
-        path = os.path.join(tmp_dir, name)
-        try:
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            continue
-
-        region = _region_from_filename(path)
-        for summary in data.get("inferenceProfileSummaries", []):
-            if not isinstance(summary, dict):
-                continue
-            status = (summary.get("status") or "").upper()
-            if status and status != "ACTIVE":
-                continue
-            profile_id = summary.get("inferenceProfileId")
-            if not profile_id:
-                continue
-            if not (
-                str(profile_id).startswith("eu.")
-                or str(profile_id).startswith("global.")
-                or region.startswith("eu-")
-            ):
-                continue
-
-            referenced_ids: list[str] = []
-            for model_ref in summary.get("models", []):
-                if not isinstance(model_ref, dict):
-                    continue
-                model_arn = model_ref.get("modelArn")
-                mid = _extract_model_id_from_arn(model_arn or "")
-                if mid:
-                    referenced_ids.append(mid)
-
-            if referenced_ids:
-                has_active_or_unknown = any(
-                    foundation_status_by_model.get(mid, "") in ("", "ACTIVE")
-                    for mid in referenced_ids
-                )
-                if not has_active_or_unknown:
-                    continue
-                for mid in referenced_ids:
-                    if foundation_status_by_model.get(mid, "") == "ACTIVE":
-                        covered_model_ids.add(mid)
-
-            key = f"profile::{profile_id}"
-            candidate = (
-                f"bedrock-{_slugify(str(profile_id))}",
-                f"bedrock/{profile_id}",
-                region,
-            )
-            selected[key] = _pick_better(selected.get(key), candidate)
-
-    for model_id, status in foundation_status_by_model.items():
-        if status != "ACTIVE":
-            continue
-        if not foundation_on_demand.get(model_id, False):
-            continue
-        if model_id in covered_model_ids:
-            continue
-        region = foundation_best_region.get(model_id, "eu-central-1")
-        key = f"foundation::{model_id}"
-        candidate = (f"bedrock-{_slugify(model_id)}", f"bedrock/{model_id}", region)
-        selected[key] = _pick_better(selected.get(key), candidate)
-
-    entries = sorted(selected.values(), key=lambda x: x[0])
+    Bedrock is served natively by the Rust `headroom-proxy` (SigV4 in-process), so
+    LiteLLM only fronts the GitHub Copilot / OpenAI lane. The config therefore has
+    just the auto-discovered named `copilot-*` entries plus the `*` wildcard.
+    """
     copilot_models = _fetch_copilot_models(copilot_token_file)
 
     header = """# litellm_config.yaml
 # AUTO-GENERATED by scripts/cli/generate-litellm-config.sh
 #
-# Architecture:
-#   bedrock-*   -> AWS Bedrock directly
+# Architecture (Copilot/OpenAI lane only — Bedrock is native in headroom-proxy):
 #   copilot-*   -> GitHub Copilot (named, auto-discovered)
 #   *           -> github_copilot/* (wildcard fallback)
 #
@@ -1011,14 +514,6 @@ model_list:
 """
 
     lines = [header]
-
-    for alias, model, region in entries:
-        lines.append(
-            f"  - model_name: {alias}\n"
-            f"    litellm_params:\n"
-            f"      model: {model}\n"
-            f"      aws_region_name: {region}\n"
-        )
 
     for model_id in copilot_models:
         alias = "copilot-" + re.sub(r"[^a-z0-9]+", "-", model_id.lower()).strip("-")
@@ -1035,8 +530,7 @@ model_list:
         f.write("".join(lines))
 
     print(f"[generator] wrote {output_file}")
-    print(f"[generator] total bedrock aliases: {len(entries)}")
-    print(f"[generator] covered by active inference profiles: {len(covered_model_ids)}")
+    print(f"[generator] named copilot aliases: {len(copilot_models)}")
     return 0
 
 
@@ -1178,60 +672,6 @@ def cmd_build_copilot_compression_payload(outfile: str, model: str) -> int:
     return 0
 
 
-def cmd_select_bedrock_model() -> int:
-    """Read /v1/models JSON on stdin; print preferred bedrock model aliases, one per line."""
-    raw = sys.stdin.read().strip()
-    try:
-        data = json.loads(raw).get("data", [])
-    except Exception:
-        return 0
-    ids = [m.get("id", "") for m in data if isinstance(m, dict)]
-    preferred = [
-        "bedrock-mistral-voxtral-mini-3b-2507",
-        "bedrock-google-gemma-3-4b-it",
-        "bedrock-mistral-ministral-3-3b-instruct",
-        "bedrock-eu-amazon-nova-micro-v1-0",
-        "bedrock-eu-amazon-nova-2-lite-v1-0",
-        "bedrock-global-amazon-nova-2-lite-v1-0",
-        "bedrock-eu-amazon-nova-lite-v1-0",
-        "bedrock-openai-gpt-oss-20b-1-0",
-        "bedrock-eu-anthropic-claude-haiku-4-5-20251001-v1-0",
-        "bedrock-global-anthropic-claude-haiku-4-5-20251001-v1-0",
-    ]
-    selected = [p for p in preferred if p in ids]
-    if selected:
-        print("\n".join(selected))
-        return 0
-    fallback = [x for x in ids if x.startswith("bedrock-")]
-    print("\n".join(fallback))
-    return 0
-
-
-def cmd_select_bedrock_anthropic_model() -> int:
-    """Read /v1/models JSON on stdin; print the preferred Anthropic-on-Bedrock model alias."""
-    raw = sys.stdin.read().strip()
-    try:
-        data = json.loads(raw).get("data", [])
-    except Exception:
-        return 0
-    ids = [m.get("id", "") for m in data if isinstance(m, dict)]
-    preferred = [
-        "bedrock-eu-anthropic-claude-haiku-4-5-20251001-v1-0",
-        "bedrock-global-anthropic-claude-haiku-4-5-20251001-v1-0",
-        "bedrock-eu-anthropic-claude-sonnet-4-5-20250929-v1-0",
-        "bedrock-global-anthropic-claude-sonnet-4-5-20250929-v1-0",
-    ]
-    for p in preferred:
-        if p in ids:
-            print(p)
-            return 0
-    for x in ids:
-        if x.startswith("bedrock-") and "anthropic" in x:
-            print(x)
-            return 0
-    return 0
-
-
 def main() -> int:
     if len(sys.argv) < 2:
         print("usage: headroom_python.py <subcommand> [args...]", file=sys.stderr)
@@ -1263,14 +703,14 @@ def main() -> int:
     if sub == "models-summary" and len(args) == 0:
         return cmd_models_summary()
 
-    if sub == "combined-stats" and len(args) == 0:
-        return cmd_combined_stats()
-    if sub == "stats-report" and len(args) == 3:
-        return cmd_stats_report(args[0], args[1], args[2])
+    if sub == "stats-report" and len(args) in (1, 2, 3):
+        raw_history = args[1] if len(args) >= 2 else ""
+        raw_combined = args[2] if len(args) == 3 else ""
+        return cmd_stats_report(args[0], raw_history, raw_combined)
 
-    if sub == "generate-config" and len(args) in (2, 3):
-        token_file = args[2] if len(args) == 3 else ""
-        return cmd_generate_config(args[0], args[1], token_file)
+    if sub == "generate-config" and len(args) in (1, 2):
+        token_file = args[1] if len(args) == 2 else ""
+        return cmd_generate_config(args[0], token_file)
 
     if sub == "build-bedrock-compression-payload" and len(args) == 1:
         return cmd_build_bedrock_compression_payload(args[0])
@@ -1278,10 +718,6 @@ def main() -> int:
         return cmd_build_copilot_cache_payload(args[0], args[1])
     if sub == "build-copilot-compression-payload" and len(args) == 2:
         return cmd_build_copilot_compression_payload(args[0], args[1])
-    if sub == "select-bedrock-model" and len(args) == 0:
-        return cmd_select_bedrock_model()
-    if sub == "select-bedrock-anthropic-model" and len(args) == 0:
-        return cmd_select_bedrock_anthropic_model()
 
     print(f"invalid arguments for subcommand: {sub}", file=sys.stderr)
     return 1

@@ -23,9 +23,9 @@ Thanks for helping improve this gateway.
 ## Expectations
 
 - Keep changes small and focused.
-- Preserve stable routing behavior:
-  - Copilot/OpenAI lane: Client -> Headroom (:4000) -> LiteLLM (:4001)
-  - Bedrock native lane: Client -> Headroom (:4002) -> headroom-bedrock (:8787) -> AWS Bedrock
+- Preserve stable routing behavior (one `headroom-proxy` process fronts both lanes):
+  - Copilot/OpenAI lane: Client -> headroom-proxy (:4000) -> LiteLLM (:4001)
+  - Bedrock native lane: Client -> headroom-proxy (:4002, native SigV4) -> AWS Bedrock
 - Do not commit secrets or runtime cache/state files.
 - Keep README/AGENTS docs in sync with behavior changes.
 - Open PRs against `main`; branch protection requires passing CI before merge.
