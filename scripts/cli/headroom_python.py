@@ -418,7 +418,7 @@ def _fetch_copilot_models(token_file: str) -> list[str]:
         with open(token_file, encoding="utf-8") as fh:
             key_data = json.load(fh)
 
-        token = ""
+        token: str = ""
         if isinstance(key_data, dict):
             token = key_data.get("token") or key_data.get("api_key") or ""
             if not token:

@@ -48,11 +48,18 @@ info "Bringing up the headroom (Rust proxy) service"
 docker compose up -d headroom >/dev/null 2>&1
 
 info "Waiting for the proxy to become healthy"
+status=none
 for _ in $(seq 1 20); do
   status="$(docker inspect -f '{{.State.Health.Status}}' headroom-gateway 2>/dev/null || echo none)"
   [ "$status" = "healthy" ] && break
   sleep 3
 done
+if [ "$status" != "healthy" ]; then
+  fail "headroom-gateway never became healthy (last status: $status)"
+  echo ""
+  echo "=== Results: $PASS passed, $FAIL failed ==="
+  exit 1
+fi
 
 # 1. Liveness
 if "${CURL[@]}" -sf "$OPENAI_URL/healthz" |
@@ -120,10 +127,10 @@ else
     -d "{\"model\":\"$COPILOT_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ok\"}],\"max_tokens\":8}")"
   OAI_AFTER="$("${CURL[@]}" -sf "$OPENAI_URL/stats" |
     python3 -c "import json,sys;print(json.load(sys.stdin)['requests']['by_provider'].get('openai',0))" 2>/dev/null || echo 0)"
-  if [ "$OAI_AFTER" -gt "$OAI_BEFORE" ]; then
-    pass "Copilot/OpenAI lane routed + recorded ($COPILOT_MODEL, HTTP $OAI_CODE): by_provider.openai ${OAI_BEFORE} -> ${OAI_AFTER}"
+  if [ "$OAI_CODE" -ge 200 ] && [ "$OAI_CODE" -lt 300 ] && [ "$OAI_AFTER" -gt "$OAI_BEFORE" ]; then
+    pass "Copilot/OpenAI lane responded + recorded ($COPILOT_MODEL, HTTP $OAI_CODE): by_provider.openai ${OAI_BEFORE} -> ${OAI_AFTER}"
   else
-    fail "Copilot/OpenAI lane request not recorded (model $COPILOT_MODEL, HTTP $OAI_CODE, openai ${OAI_BEFORE} -> ${OAI_AFTER})"
+    fail "Copilot/OpenAI lane failed (model $COPILOT_MODEL, HTTP $OAI_CODE, openai ${OAI_BEFORE} -> ${OAI_AFTER})"
   fi
 fi
 
