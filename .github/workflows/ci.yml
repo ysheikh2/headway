@@ -46,8 +46,6 @@ jobs:
             yaml:
               - '**/*.yml'
               - '**/*.yaml'
-            dashboard:
-              - 'scripts/runtime/headroom/dashboard.html'
             relevant:
               - '**'
               - '!LICENSE'
@@ -124,9 +122,7 @@ jobs:
       - name: Python type checking (all tracked .py)
         run: |
           set -euo pipefail
-          # Exclude runtime-only Docker patches: they import headroom/fastapi/httpx
-          # which only exist inside the container and cannot be resolved in CI.
-          mapfile -t files < <(git ls-files '*.py' | grep -Ev 'scripts/runtime/headroom/headroom_patch/')
+          mapfile -t files < <(git ls-files '*.py')
           if [ "${#files[@]}" -gt 0 ]; then
             uvx ty check --error-on-warning "${files[@]}"
           fi
@@ -210,27 +206,6 @@ jobs:
 
       - name: Secret scan
         run: ./scripts/cli/secret-scan.sh
-
-  dashboard-check:
-    name: Dashboard patch validation
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    needs: detect-changes
-    if: needs.detect-changes.outputs.dashboard == 'true'
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6.0.3
-
-      - name: Set up Python
-        uses: actions/setup-python@v6.2.0
-        with:
-          python-version: "3.12"
-
-      - name: Validate dashboard matches upstream + patch
-        run: |
-          set -euo pipefail
-          python scripts/runtime/headroom/sync_dashboard.py --check
 
   autofix:
     name: Auto-fix formatting
@@ -326,7 +301,6 @@ jobs:
       - python-checks
       - yaml-actions-checks
       - compose-security-checks
-      - dashboard-check
       - autofix
     if: always()
 
@@ -359,8 +333,4 @@ jobs:
 
           if [ "${{ needs.detect-changes.outputs.relevant }}" == "true" ]; then
             [[ "${{ needs.compose-security-checks.result }}" == "success" ]]
-          fi
-
-          if [ "${{ needs.detect-changes.outputs.dashboard }}" == "true" ]; then
-            [[ "${{ needs.dashboard-check.result }}" == "success" ]]
           fi

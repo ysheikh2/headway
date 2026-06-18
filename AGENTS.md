@@ -87,6 +87,8 @@ every lane (Copilot/OpenAI via the optional LiteLLM upstream, Bedrock via native
 SigV4) and serves the unified `/stats` + `/dashboard`. No headway-side Docker
 build workflow is required, and there are no runtime patches.
 
-The `sync-upstream-headroom` workflow runs weekly (Mondays) and auto-creates a PR when the upstream
-dashboard template changes. GitHub Actions is permitted to create PRs in this repo
+The dashboard is embedded in the `headroom-proxy` binary and served at `/dashboard`;
+headway no longer vendors or syncs a dashboard template, so the old
+`sync-upstream-headroom` workflow and `scripts/runtime/headroom/` tree are gone.
+GitHub Actions is permitted to create PRs in this repo
 (`can_approve_pull_request_reviews: true` is set at the repo level).

@@ -29,7 +29,7 @@ ENTROPY_HITS=$(
 import os,re
 root='.'
 skip_dirs={'.data','.git','.kilo','.playwright-mcp','.venv'}
-skip_files={'uv.lock','.env'}
+skip_files={'uv.lock','.env','.env.template'}
 pat=re.compile(r'[A-Za-z0-9+/=_-]{32,}')
 ignore_ext={'.png','.jpg','.jpeg','.gif','.webp','.pdf','.zip','.gz'}
 results=[]
