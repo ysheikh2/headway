@@ -62,6 +62,11 @@ services:
       - HEADROOM_COMPRESS_USER_MESSAGES
       - HEADROOM_MIN_TOKENS
       - HEADROOM_PROTECT_RECENT
+      # Persist savings/history to the mounted volume. The proxy's default
+      # workspace is ~/.headroom = /root/.headroom (HOME is root), which is
+      # NOT mounted — so stats reset on every restart and the dashboard
+      # Historical tab stayed empty. Point it at the ./.data/headroom mount.
+      - HEADROOM_WORKSPACE_DIR=/home/nonroot/.headroom
       - HEADWAY_BEDROCK_AUTO_CACHE_CONTROL=${HEADWAY_BEDROCK_AUTO_CACHE_CONTROL:-1}
       - HEADROOM_BEDROCK_PROXY_URL=http://headroom-bedrock:8787
       - HEADWAY_BEDROCK_DEBUG_COMPRESS=${HEADWAY_BEDROCK_DEBUG_COMPRESS:-0}
