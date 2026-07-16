@@ -303,7 +303,7 @@ jobs:
 
       - name: Commit formatting changes
         if: steps.changed.outputs.has_changes == 'true'
-        uses: stefanzweifel/git-auto-commit-action@v7.1.0
+        uses: stefanzweifel/git-auto-commit-action@v7.2.0
         with:
           commit_message: "chore(ci): auto-format via GitHub Actions"
           commit_user_name: github-actions[bot]
