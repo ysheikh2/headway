@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Mark stale and close
-        uses: actions/stale@v10.3.0
+        uses: actions/stale@v10.4.0
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           days-before-stale: 21
